@@ -35,3 +35,8 @@ def subject_wise_split(participant, subject_wise, split=0.10, seed=42):
         train_index = I[num:]
         extract = np.unique(participant[test_index])
     return train_index, test_index, extract
+
+
+if __name__ == "__main__":
+    # todo : @Vaibhav  put example data here that users can run to test code
+    #train_index, test_index, extract = subject_wise_split(participant, subject_wise, split=0.10, seed=42)
