@@ -21,7 +21,7 @@ def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
         num = np.round(uniq_parti.shape[0]*split).astype('int64')
         np.random.shuffle(uniq_parti)
         extract = uniq_parti[0:num]
-        test_index = np.array([],dtype='int64')
+        test_index = np.array([], dtype='int64')
         for j in extract:
             test_index = np.append(test_index, np.where(participant == j)[0])
         train_index = np.delete(np.arange(len(participant)), test_index)
@@ -29,9 +29,9 @@ def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
         np.random.shuffle(train_index)
 
     else:
-        I=np.arange(len(participant)).astype('int64')
+        I = np.arange(len(participant)).astype('int64')
         np.random.shuffle(I)
-        num=np.round(participant.shape[0] * split).astype('int64')
+        num = np.round(participant.shape[0] * split).astype('int64')
         test_index = I[0:num]
         train_index = I[num:]
         extract = np.unique(participant[test_index])
@@ -39,6 +39,6 @@ def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
 
 
 if __name__ == "__main__":
-    data=pd.read_pickle('.\\testdata.pkl')
-    train_index, test_index, extract = split.subject_wise_split(participant=data['Participant'],subject_wise=True, split=0.10, seed=42)
+    data = pd.read_pickle('testdata.pkl')
+    train_index, test_index, extract = subject_wise_split(participant=data['Participant'], subject_wise=True)
     print(extract)
