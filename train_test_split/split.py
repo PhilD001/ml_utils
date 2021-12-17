@@ -1,7 +1,8 @@
+import pandas as pd
 import numpy as np
 
 
-def subject_wise_split(participant, subject_wise, split=0.10, seed=42):
+def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
     """
     Input:
     participant = array of Classes / array[Y]
@@ -38,5 +39,6 @@ def subject_wise_split(participant, subject_wise, split=0.10, seed=42):
 
 
 if __name__ == "__main__":
-    # todo : @Vaibhav  put example data here that users can run to test code
-    #train_index, test_index, extract = subject_wise_split(participant, subject_wise, split=0.10, seed=42)
+    data=pd.read_pickle('.\\testdata.pkl')
+    train_index, test_index, extract = split.subject_wise_split(participant=data['Participant'],subject_wise=True, split=0.10, seed=42)
+    print(extract)
