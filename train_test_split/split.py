@@ -2,17 +2,18 @@ import pandas as pd
 import numpy as np
 
 
-def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
+def subject_wise_split(x,y,participant, subject_wise=True, split=0.10, seed=42):
     """
     Input:
+    x = featuers space
+    y = class or output
     participant = array of Classes / array[Y]
     Subject_wise = True or False. True = subject-wise split approach and False = Random Split
     split = float number between 0 and 1. Default value = 0.10. percentage spilt for test set.
     seed = int. seed selector for numpy random number generator.
 
     Return:
-    train_index = array[int64], indexes for training set.
-    test_index = array[int64], indexes for test set.
+    x_train,y_train,x_test,y_test 
     extract = array[string], participants extracted for test set.
     """
     np.random.seed(seed)
@@ -35,7 +36,12 @@ def subject_wise_split(participant, subject_wise=True, split=0.10, seed=42):
         test_index = I[0:num]
         train_index = I[num:]
         extract = np.unique(participant[test_index])
-    return train_index, test_index, extract
+
+    x_train=x[train_index]
+    y_train=y[train_index]
+    x_test=x[test_index]
+    y_test=y[test_index]
+    return x_train,y_train,x_test,y_test,extract
 
 
 if __name__ == "__main__":
