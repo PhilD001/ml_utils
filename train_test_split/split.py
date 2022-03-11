@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 
-def subject_wise_split(x,y,participant, subject_wise=True, split=0.10, seed=42):
+def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42):
     """
     Input:
     x = featuers space
@@ -37,18 +37,19 @@ def subject_wise_split(x,y,participant, subject_wise=True, split=0.10, seed=42):
         train_index = I[num:]
         extract = np.unique(participant[test_index])
 
-    x_train=x[train_index]
-    y_train=y[train_index]
-    x_test=x[test_index]
-    y_test=y[test_index]
-    return x_train,y_train,x_test,y_test,extract
+    x_train = x[train_index]
+    y_train = y[train_index]
+    x_test = x[test_index]
+    y_test = y[test_index]
+    return x_train, y_train, x_test, y_test, extract
 
 
 if __name__ == "__main__":
     data = pd.read_pickle('testdata.pkl')
-    x=np.random.randint(0,5,size=[data['Participant'].shape[0],2])
-    y=np.random.randint(0,3,size=[data['Participant'].shape[0],1])
-    x_train,y_train,x_test,y_test,extract = split.subject_wise_split(x,y,participant=data['Participant'],subject_wise=True, split=0.10, seed=42)
+    x = np.random.randint(0,5,size=[data['Participant'].shape[0],2])
+    y = np.random.randint(0,3,size=[data['Participant'].shape[0],1])
+    x_train, y_train, x_test, y_test, extract = subject_wise_split(x, y, participant=data['Participant'],
+                                                                   subject_wise=True, split=0.10, seed=42)
     print(extract)
     print(x_train.shape)
     print(x_test.shape)
