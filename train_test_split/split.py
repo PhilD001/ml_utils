@@ -13,7 +13,7 @@ def subject_wise_split(x,y,participant, subject_wise=True, split=0.10, seed=42):
     seed = int. seed selector for numpy random number generator.
 
     Return:
-    x_train,y_train,x_test,y_test 
+    x_train,y_train,x_test,y_test
     extract = array[string], participants extracted for test set.
     """
     np.random.seed(seed)
@@ -46,5 +46,9 @@ def subject_wise_split(x,y,participant, subject_wise=True, split=0.10, seed=42):
 
 if __name__ == "__main__":
     data = pd.read_pickle('testdata.pkl')
-    train_index, test_index, extract = subject_wise_split(participant=data['Participant'], subject_wise=True)
+    x=np.random.randint(0,5,size=[data['Participant'].shape[0],2])
+    y=np.random.randint(0,3,size=[data['Participant'].shape[0],1])
+    x_train,y_train,x_test,y_test,extract = split.subject_wise_split(x,y,participant=data['Participant'],subject_wise=True, split=0.10, seed=42)
     print(extract)
+    print(x_train.shape)
+    print(x_test.shape)
