@@ -7,7 +7,7 @@ def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42
     Arguments:
         x: nd.array, feature space
         y: nd.array, label class
-        participant: nd.array, participant assiciated with each row in x and y
+        participant: nd.array, participant associated with each row in x and y
         subject_wise: bool, choices {True, False}. True = subject-wise split approach, False random-split
         split: float, number between 0 and 1. Default value = 0.10. percentage spilt for test set.
         seed: int. seed selector for numpy random number generator.
@@ -48,11 +48,17 @@ def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42
 
 
 if __name__ == "__main__":
-    data = pd.read_pickle('testdata.pkl')
-    x = np.random.randint(0, 5, size=[data['Participant'].shape[0], 2])
-    y = np.random.randint(0, 3, size=[data['Participant'].shape[0], 1])
-    x_train, y_train, x_test, y_test, p_train, p_test = subject_wise_split(x, y, participant=data['Participant'],
-                                                                           subject_wise=True, split=0.10, seed=42)
+    # create sample data with 900 samples and 31 subjects
+    participants = ['subject'] * 900
+    subjects = [participant + '_' + str(round(i/30)+1).zfill(2) for i, participant in enumerate(participants)]
+    subjects = np.asarray(subjects)
+    x = np.random.rand(len(subjects), 2)
+    y = np.random.randint(0, 3, size=[len(subjects), 1])
+    x_train, y_train, x_test, y_test, p_train, p_test = subject_wise_split(x, y,
+                                                                           participant=subjects,
+                                                                           subject_wise=True,
+                                                                           split=0.10,
+                                                                           seed=42)
     print(np.unique(p_test))
     print(x_train.shape)
     print(x_test.shape)
