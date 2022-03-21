@@ -1,20 +1,26 @@
-import pandas as pd
 import numpy as np
 
 
 def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42):
-    """
+    """ Split data into train and test sets via an inter-subject scheme, see:
+    Shah, Flood, Grimm, and Dixon: 'Generalizability of deep learning irregular walking surface prediction models' under
+    review for the journal of biomechanics, 2022
+
     Arguments:
         x: nd.array, feature space
         y: nd.array, label class
         participant: nd.array, participant associated with each row in x and y
-        subject_wise: bool, choices {True, False}. True = subject-wise split approach, False random-split
-        split: float, number between 0 and 1. Default value = 0.10. percentage spilt for test set.
-        seed: int. seed selector for numpy random number generator.
+        subject_wise: bool, choices {True, False}, default = True. True = subject-wise split approach, False random-split
+        split: float, number between 0 and 1. Default = 0.10. percentage spilt for test set.
+        seed: int. default = 42. Seed selector for numpy random number generator.
 
     Returns:
-        x_train,y_train,x_test,y_test
-        subject_train, subject_test = array[string], participants extracted for train and test set.
+        x_train: nd.array, train set for feature space
+        x_test: nd.array, test set for feature space
+        y_train: nd.array, train set label class
+        y_test: nd.array, test set label class
+        subject_train: nd.array[string], train set for participants by row of input data
+        subjects_test: nd.array[string[, test set for participants by row of input data
     """
 
     np.random.seed(seed)
@@ -48,7 +54,7 @@ def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42
 
 
 if __name__ == "__main__":
-    # create sample data with 900 samples and 31 subjects
+    # create sample data with 900 samples and 31 subjects for testing
     participants = ['subject'] * 900
     subjects = [participant + '_' + str(round(i/30)+1).zfill(2) for i, participant in enumerate(participants)]
     subjects = np.asarray(subjects)
