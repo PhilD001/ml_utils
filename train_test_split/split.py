@@ -3,9 +3,9 @@ import numpy as np
 
 def subject_wise_split(x, y, participant, subject_wise=True, split=0.10, seed=42):
     """ Split data into train and test sets via an inter-subject scheme, see:
-    Shah, Flood, Grimm, and Dixon: 'Generalizability of deep learning irregular walking surface prediction models' under
-    review for the journal of biomechanics, 2022
-
+    Shah, V., Flood, M. W., Grimm, B., & Dixon, P. C. (2022). Generalizability of deep learning models for predicting outdoor irregular walking surfaces. 
+    Journal of Biomechanics, 139, 111159. https://doi.org/10.1016/j.jbiomech.2022.111159
+    
     Arguments:
         x: nd.array, feature space
         y: nd.array, label class
