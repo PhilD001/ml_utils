@@ -27,7 +27,7 @@ def main(arg_dict):
     # LOAD DATA --------------------------------------------------------------------------------------------------------
     # - shape of data should be (samples, frames, channels), see Deep Learning with Python p 36
     start_time = time.time()
-    X, y, user = load_database(arg_dict['data'])
+    X, y, user, channel_names = load_database(arg_dict['data'], arg_dict['channels'])
 
     # encode labels
     le = LabelEncoder()
@@ -61,31 +61,31 @@ def main(arg_dict):
         # only works for acceleration for now
         print("\ncomputing features...".format(X_train.shape[1]))
 
-        X_train = make_feature_vector(X_train, te=1 / 50)
-        X_test = make_feature_vector(X_test, te=1 / 50)
+        X_train, feature_names = make_feature_vector(X_train, channel_names, te=1 / 50)
+        X_test, _ = make_feature_vector(X_test, channel_names, te=1 / 50)
 
         print("computed {} features".format(X_train.shape[1]))
 
         grid_search = build_model(model_name=arg_dict['model_name'])
 
         # execute search for hyperparameters
-        print('executing search for best hyperparameters...')
+        print('executing search for best hyperparameters on the training set...')
         grid_result = grid_search.fit(X_train, y_train)
 
         # summarize result
-        print('Best Accuracy Score = {0:.3f} %'.format(grid_result.best_score_*100))
-        print('Best Hyperparameters: {}'.format(grid_result.best_params_))
+        print('Best Accuracy Score (train)= {0:.3f} %'.format(grid_result.best_score_*100))
+        print('Best Hyperparameters (train): {}'.format(grid_result.best_params_))
 
         # implement best model
         model = build_model(model_name=arg_dict['model_name'], grid_results=grid_result)
         model.fit(X_train, y_train)
 
-        # create a "fake" history object for reporting results
+        # create a "fake" history object for reporting results in a similar style to tensorflow models
         history = {}
         history['history'] = {}
         history['history']['accuracy'] = [grid_result.best_score_]
         history['history']['val_accuracy'] = [0]
-        history = AttrDict(history)
+        #history = AttrDict(history)
 
     else:
 
@@ -133,26 +133,40 @@ def main(arg_dict):
         else:
             history = model.fit(X_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.2, verbose=1)
 
+    y_pred_train = model.predict(X_train)
+    if np.ndim(y_pred_train) == 2:
+        y_pred_train = np.argmax(y_pred_train, axis=1)
+        y_train = np.argmax(y_train, axis=1)
+
+    specificity_train = recall_score(y_train, y_pred_train, pos_label=0, average='weighted')  # https://stackoverflow.com/questions/33275461/specificity-in-scikit-learn
+    clf_report_train = classification_report(y_train, y_pred_train, output_dict=True)
+    cm_train = confusion_matrix(y_train, y_pred_train)
+
     # EVALUATE MODEL ON TEST SET --------------------------------------------------------------------------------------
     # - You should not tune your model to improve the score on the test set.
     # - see Chollet, Deep Learning with Python, p97
+    cm_test = None
+    clf_report_test = None
+    specificity_test = None
     if args_dict['evaluate_on_test_set']:
+        #todo : save the previously trained model to avoid running again?
         y_pred = model.predict(X_test)
-    else:
-        y_pred = model.predict(X_train)
-        y_test = y_train    # just used to simplify the code later, in the final run, evaluation is done on real test
+    # else:
+    #     y_pred = model.predict(X_train)
+    #     y_test = y_train    # just used to simplify the code later, in the final run, evaluation is done on real test
 
-    if np.ndim(y_pred) == 2:
-        y_pred = np.argmax(y_pred, axis=1)
-        y_test = np.argmax(y_test, axis=1)
+        if np.ndim(y_pred) == 2:
+            y_pred = np.argmax(y_pred, axis=1)
+            y_test = np.argmax(y_test, axis=1)
 
-    specificity = recall_score(y_test, y_pred, pos_label=0, average='weighted')# https://stackoverflow.com/questions/33275461/specificity-in-scikit-learn
-    clf_report = classification_report(y_test, y_pred, output_dict=True)
-    cm = confusion_matrix(y_test, y_pred)
+        specificity_test = recall_score(y_test, y_pred, pos_label=0, average='weighted')# https://stackoverflow.com/questions/33275461/specificity-in-scikit-learn
+        clf_report_test = classification_report(y_test, y_pred, output_dict=True)
+        cm_test = confusion_matrix(y_test, y_pred)
 
     # DISPLAY RESULTS FOR USER -----------------------------------------------------------------------------------------
     run_time = time.time() - start_time
-    print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, run_time, clf_report, cm, specificity)
+    print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, run_time, clf_report_train, cm_train,
+                            specificity_train, clf_report_test, cm_test, specificity_test)
 
 
 if __name__ == '__main__':
@@ -161,6 +175,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="sample ml framework ")
     parser.add_argument('--data', default='keras_sample', choices={'keras_sample', 'HAR_sample'})
 
+    # preprocessing arguments
+    parser.add_argument('--channels', type=str, default='all', help='select all or a subset of channels by name')
+
     # arguments for choosing train/test split **************************************************************************
     parser.add_argument('--train_test_split_by_user', type=bool, default=False)
     parser.add_argument('--test_ratio', type=float, default=0.2)
@@ -168,7 +185,8 @@ if __name__ == '__main__':
     parser.add_argument('--evaluate_on_test_set', type=bool, default=False, help='only set to true after model tuning')
 
     # arguments for selection model type *******************************************************************************
-    parser.add_argument('--model_name', type=str, default='cnn_sample', help='see models.py for all choices')
+    parser.add_argument('--model_name', type=str, default='cnn', help='see models.py for all choices',
+                        choices={'cnn', 'svc'})
 
     # arguments for feature engineering ********************************************************************************
     parser.add_argument('--feature_selection', action='store_true')
@@ -184,6 +202,10 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', default=False, action='store_true')
     parser.add_argument('--dropout_amt', type=float, default=0.3, help='dropout ratio, must be [0,1]')
     parser.add_argument('--regularizer', type=str, default=None, choices=['L1', 'L2', None], help='keras regularizer')
+    parser.add_argument('--regularizer_amt', type=float, default=0.01)
+
+    # tuning stuff
+    parser.add_argument('--tune', default=False, action='store_true')
 
     args = parser.parse_args()
     args_dict = vars(args)

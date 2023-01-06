@@ -54,8 +54,9 @@ def plot_by_label(X, y, y_labels=None, n_examples=10):
     plt.show()
 
 
-def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, train_time, clf_report=None, cm=None,
-                            specificity=None):
+def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, train_time,
+                            clf_report_train, cm_train, specificity_train,
+                            clf_report_test=None, cm_test=None, specificity_test=None):
     """print, plot, and results using keras history object and other arguments"""
 
     # create results dir
@@ -69,9 +70,9 @@ def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, t
     os.mkdir(result_dir_current_model)
     with open(os.path.join(result_dir_current_model, 'arguments.txt'), 'w') as file:
         file.write(json.dumps(arg_dict))
-
-    with open(os.path.join(result_dir_current_model, 'test_results.txt'), 'w') as file:
-        file.write(json.dumps(clf_report))
+    if arg_dict['evaluate_on_test_set']:
+        with open(os.path.join(result_dir_current_model, 'test_results.txt'), 'w') as file:
+            file.write(json.dumps(clf_report_test))
 
     print('\n******** RESULTS *************************')
     print('* Data set: {}'.format(arg_dict['data']))
@@ -82,7 +83,7 @@ def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, t
         print('* Excluded positions: {}'.format(arg_dict['excluded_positions']))
 
     print('* Segment shape: {}'.format(arg_dict['segment_shape']))
-    print('* n secs per sample: {} seconds'.format(arg_dict['window_secs']))
+    # print('* n secs per sample: {} seconds'.format(arg_dict['window_secs']))
     print('* n samples: {0}'.format(len(y)))
     print('* n classes: {0}'.format(len(np.unique(y))))
     for i in range(0, len(np.unique(y))):
@@ -97,10 +98,11 @@ def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, t
     print('*')
     print('* training set accuracy:     {0:.1f}%'.format(history.history['accuracy'][-1]*100))
     print('* validation set accuracy:   {0:.1f}%'.format(history.history['val_accuracy'][-1]*100))
-    print('* Test set accuracy:         {0:.1f}%'.format(clf_report['accuracy'] * 100))
-    print('* Test set F1-score:         {0:.1f}%'.format(clf_report['weighted avg']['f1-score'] * 100))
-    print('* Test sensitivity (recall): {0:.1f}%'.format(clf_report['weighted avg']['recall'] * 100))
-    print('* Test specificity (FIX THIS):{0:.1f}%'.format(specificity * 100))
+    if arg_dict['evaluate_on_test_set']:
+        print('* Test set accuracy:         {0:.1f}%'.format(clf_report_test['accuracy'] * 100))
+        print('* Test set F1-score:         {0:.1f}%'.format(clf_report_test['weighted avg']['f1-score'] * 100))
+        print('* Test sensitivity (recall): {0:.1f}%'.format(clf_report_test['weighted avg']['recall'] * 100))
+        print('* Test specificity (FIX THIS):{0:.1f}%'.format(specificity_test * 100))
 
     print('*')
     print('* date: {}\n'.format(datetime.datetime.now()))
@@ -112,12 +114,13 @@ def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, t
         plt_history.savefig(os.path.join(result_dir_current_model, 'train_val_acc_loss.png'))
 
     target_names = label_map.keys()
-    plt_cm = plot_confusion_matrix(cm, target_names, title='Test CM: {0} classes, {1} channels,  {2} sec window, accuracy {3:.1f}%'
-                                   .format(len(np.unique(y)), arg_dict['channels'], arg_dict['window_secs'], clf_report['accuracy'] * 100))
-    plt_cm.savefig(os.path.join(result_dir_current_model, 'test_cm.png'))
+    if arg_dict['evaluate_on_test_set']:
+        plt_cm = plot_confusion_matrix(cm_test, target_names, title='Test CM: {0} classes, {1} channels,  {2} sec window, accuracy {3:.1f}%'
+                                       .format(len(np.unique(y)), arg_dict['channels'], arg_dict['window_secs'], clf_report['accuracy'] * 100))
+        plt_cm.savefig(os.path.join(result_dir_current_model, 'test_cm.png'))
 
     # create plots of strips
-    plot_strips(X, y, label_map, channel_names, result_dir_current_model)
+    # plot_strips(X, y, label_map, channel_names, result_dir_current_model)
 
 
 def plot_train_val_acc_loss(history):

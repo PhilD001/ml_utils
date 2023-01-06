@@ -22,8 +22,11 @@ def stat_area_features(x, te=1.0):
     area_ts = np.trapz(x, axis=1, dx=te).reshape(-1, 1)  # area under curve
     sq_area_ts = np.trapz(x ** 2, axis=1, dx=te).reshape(-1, 1)  # area under curve ** 2
 
+    names = ['mean_ts', 'max_ts', 'min_ts', 'std_ts', 'skew_ts', 'kurtosis_ts', 'iqr_ts',  'mad_ts', 'area_ts',
+             'sq_area_ts']
+
     return np.concatenate((mean_ts, max_ts, min_ts, std_ts, skew_ts, kurtosis_ts,
-                           iqr_ts, mad_ts, area_ts, sq_area_ts), axis=1)
+                           iqr_ts, mad_ts, area_ts, sq_area_ts), axis=1), names
 
 
 def frequency_domain_features(x, te=1.0):
@@ -61,7 +64,7 @@ def frequency_domain_features(x, te=1.0):
                            dft_max_coef, dft_max_coef_f), axis=1)
 
 
-def make_feature_vector(x, te=1.0):
+def make_feature_vector(x, channel_names, te=1.0):
     """ create basic features based on :
         https://github.com/jeandeducla/ML-Time-Series/blob/master/Neural_Network-Accelerometer-Features.ipynb
 
@@ -78,18 +81,18 @@ def make_feature_vector(x, te=1.0):
     """
 
     feats_all = []
+    feats_all_names = []
     for ch in range(0, x.shape[2]):
         # Raw signals :  stat and area features
-        features_xt = stat_area_features(x[:, :, ch], te=te)
-
-        # Jerk signals :  stat and area features
-        features_xt_jerk = stat_area_features((x[:, 1:, ch] - x[:, :-1, ch]) / te, te=te)
+        features_t, feature_t_names = stat_area_features(x[:, :, ch], te=te)
+        feature_t_names = [channel_names[ch] + x for x in feature_t_names]        # Jerk signals :  stat and area features
+        # features_xt_jerk = stat_area_features((x[:, 1:, ch] - x[:, :-1, ch]) / te, te=te)
 
         # Raw signals : frequency domain features
-        features_xf = frequency_domain_features(x[:, :, ch], te=1 / te)
+        # features_f = frequency_domain_features(x[:, :, ch], te=1 / te)
 
         # Jerk signals : frequency domain features
-        features_xf_jerk = frequency_domain_features((x[:, 1:, ch] - x[:, :-1, ch]) / te, te=1 / te)
+        # features_xf_jerk = frequency_domain_features((x[:, 1:, ch] - x[:, :-1, ch]) / te, te=1 / te)
 
         # Raw signals correlation coefficient between axis
         # cor = np.empty((x.shape[0], 3))
@@ -100,11 +103,12 @@ def make_feature_vector(x, te=1.0):
         #     cor[row, 1] = np.corrcoef(xyz_matrix)[0, 2]
         #     cor[row, 2] = np.corrcoef(xyz_matrix)[1, 2]
 
-        feats_ch = np.concatenate((features_xt,
-                                  features_xt_jerk,
-                                  features_xf,
-                                  features_xf_jerk,
-                                   ), axis=1)
-        feats_all.append(feats_ch)
+        # feats_ch = np.concatenate((features_t, features_f), axis=1)
+        feats_all.append(features_t)
+        feats_all_names.append(feature_t_names)
 
-    return np.asarray(feats_all).squeeze(axis=0)
+    # flatten lists and arrays
+    feats_all = np.concatenate(feats_all, axis=1)
+    feats_all_names = list(np.concatenate(feats_all_names).flat)
+
+    return feats_all, feats_all_names

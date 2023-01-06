@@ -2,21 +2,28 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
-from tensorflow.keras import Sequential, callbacks, optimizers, regularizers
-from tensorflow.keras.layers import Conv1D, Dense, BatchNormalization, GlobalAveragePooling1D, LSTM, Dropout
+from tensorflow import keras
+# from keras import Sequential, callbacks, optimizers, regularizers
+# from tensorflow.keras.layers import Conv1D, Dense, BatchNormalization, GlobalAveragePooling1D, LSTM, Dropout
 
 
-def build_model(model_name, grid_results=None, n_classes=None, input_shape=None, units=None, n_layers=None, dropout=None, regularizer=None,
-                dropout_amt=0):
+def build_model(model_name, grid_results=None, n_classes=None, input_shape=None, units=None, n_layers=None,
+                dropout=None, regularizer=None, dropout_amt=0, regularizer_amt=0.001):
 
     if 'cnn' in model_name:
         model = cnn(units=units, dropout=dropout, n_layers=n_layers, n_classes=n_classes, input_shape=input_shape,
-                    dropout_amt=dropout_amt, kernel_regularizer=regularizer)
+                    dropout_amt=dropout_amt, kernel_regularizer=regularizer,)
     elif 'lstm' in model_name:
         model = lstm(units=units, dropout=dropout, n_classes=n_classes, input_shape=input_shape,
                      dropout_amt=dropout_amt, kernel_regularizer=regularizer)
     elif 'svc' in model_name:
         model = svc(grid_results)
+    elif 'random_forest' in model_name:
+        raise NotImplementedError
+        #model = random_forest(grid_results)
+    elif 'xgboost' in model_name:
+        raise NotImplementedError
+        # model = xgboost(grid_results)
     else:
         raise NotImplementedError
 
@@ -149,43 +156,43 @@ def lstm(units=100, activation='relu', lr=0.001, dropout=False, n_classes=3, inp
 
 
 def cnn(units=64, activation='relu', lr=0.001, dropout=False, n_layers=3, n_classes=3, input_shape=(5, 3840),
-        kernel_size=3, dropout_amt=0.2, kernel_regularizer=None):
+        kernel_size=3, dropout_amt=0.2, kernel_regularizer=None, kernel_regularizer_amt=0.01):
     """a keras CNN ample time series model rewritten from keras
        see: https://keras.io/examples/timeseries/timeseries_classification_from_scratch/
        """
 
     # set regularizers
-    if kernel_regularizer is 'L1':
-        kernel_regularizer = regularizers.L1
-    elif kernel_regularizer is 'L2':
-        kernel_regularizer = regularizers.L2
+    if kernel_regularizer == 'L1':
+        kernel_regularizer = keras.regularizers.L1(kernel_regularizer_amt)
+    elif kernel_regularizer == 'L2':
+        kernel_regularizer = keras.regularizers.L2(kernel_regularizer_amt)
 
     # initialize model
-    model = Sequential()
-    model.add(Conv1D(filters=units, kernel_size=kernel_size, input_shape=input_shape, padding='same',
-                     activation=activation, kernel_regularizer=kernel_regularizer))
-    model.add(BatchNormalization())
+    model = keras.Sequential()
+    model.add(keras.layers.Conv1D(filters=units, kernel_size=kernel_size, input_shape=input_shape,
+                                  padding='same', activation=activation, kernel_regularizer=kernel_regularizer))
+    model.add(keras.layers.BatchNormalization())
 
     # keep adding convolutional inner layers
     for n_layer in range(0, n_layers):
-        model.add(Conv1D(filters=units, kernel_size=kernel_size, padding='same', activation=activation,
-                         kernel_regularizer=kernel_regularizer))
-        model.add(BatchNormalization())
+        model.add(keras.layers.Conv1D(filters=units, kernel_size=kernel_size, padding='same', activation=activation,
+                                      kernel_regularizer=kernel_regularizer))
+        model.add(keras.layers.BatchNormalization())
 
     # add an option for dropout
     if dropout:
-        model.add(Dropout(dropout_amt))
+        model.add(keras.layers.Dropout(dropout_amt))
 
     # finish with global average pooling
-    model.add(GlobalAveragePooling1D())
+    model.add(keras.layers.GlobalAveragePooling1D())
 
     # dense layer to output classes
-    opt = optimizers.Adam(learning_rate=lr)
+    opt = keras.optimizers.Adam(learning_rate=lr)
     if n_classes == 2:
-        model.add(Dense(n_classes, activation='sigmoid'))
+        model.add(keras.layers.Dense(n_classes, activation='sigmoid'))
         model.compile(loss='binary_crossentropy', metrics=['accuracy'], optimizer=opt)
     else:
-        model.add(Dense(n_classes, activation='softmax'))
+        model.add(keras.layers.Dense(n_classes, activation='softmax'))
         model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer=opt)
 
     return model
@@ -195,7 +202,7 @@ def set_keras_callbacks(early_stop_patience=50):
     """ a callback taken from a Keras example,
     see : https://keras.io/examples/timeseries/timeseries_classification_from_scratch/
     """
-    callback = [callbacks.ModelCheckpoint("best_model.h5", save_best_only=True, monitor="val_loss"),
-                callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=20, min_lr=0.0001),
-                callbacks.EarlyStopping(monitor="val_loss", patience=early_stop_patience, verbose=1)]
+    callback = [keras.callbacks.ModelCheckpoint("best_model.h5", save_best_only=True, monitor="val_loss"),
+                keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=20, min_lr=0.0001),
+                keras.callbacks.EarlyStopping(monitor="val_loss", patience=early_stop_patience, verbose=1)]
     return callback

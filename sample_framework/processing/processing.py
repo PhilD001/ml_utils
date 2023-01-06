@@ -1,18 +1,30 @@
 import os
 import numpy as np
 import pandas as pd
+from tensorflow import keras
 from definitions import DIR_DATA
 
 
-def load_database(db_name):
-    """ provides access to database db_name """
+def load_database(db_name, channels='all'):
+    """ provides access to database db_name
+
+    Note:
+    - Regarding organization of data tensors, Chollet, Deep Learning with Python, section 2.2.10m recommends:
+    "Whenever time matters in your data (or the notion of sequence order), it makes sense to store it in a 3D tensor with
+    an explicit time axis. Each sample can be encoded as a sequence of vectors (a 2D tensor), and thus a batch of data
+    will be encoded as a 3D tensor (see figure 2.3)."
+    """
+
+    if channels != 'all':
+        raise NotImplementedError
+
     if db_name == 'keras_sample':
-        X, y, user = load_keras_sample_time_series_db()
+        X, y, user, channel_names = load_keras_sample_time_series_db()
     elif db_name == 'HAR_sample':
-        X, y, user = load_har_db()
+        X, y, user, channel_names = load_har_db()
     else:
         raise NotImplementedError('database {} not supporte'.format(db_name))
-    return X, y, user
+    return X, y, user, channel_names
 
 
 def load_keras_sample_time_series_db():
@@ -66,12 +78,14 @@ def load_keras_sample_time_series_db():
 
     # get users
     users = None
-    return X, y, users
+    channel_names = ['motor_noise']
+    return X, y, users, channel_names
 
 
 def load_har_db():
     """" loads the UCL human activity recognition dataset
     see: https://machinelearningmastery.com/how-to-develop-rnn-models-for-human-activity-recognition-time-series-classification/
+
     """
     pth = os.path.join(DIR_DATA + os.sep)
     if len(os.listdir(pth)) == 0:
@@ -79,31 +93,34 @@ def load_har_db():
                       'https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip')
 
     # extract train and test set data
-    X_train, y_train, X_test, y_test = _load_dataset_har(pth)
+    X_train, y_train, X_test, y_test, user_train, user_test = _load_dataset_har(pth)
 
     # merge (splitting will occur later)
     X = np.vstack((X_train, X_test))
     y = np.vstack((y_train, y_test))
+    users = np.vstack((user_train, user_test))
 
     # undo categorical
     y = np.argmax(y, axis=1)
 
-    users = None
-    return X, y, users
+    channel_names = ['total_acc_x', 'total_acc_y', 'total_acc_z', 'body_acc_x',  'body_acc_y', 'body_acc_z',
+                     'body_gyro_x',  'body_gyro_y', 'body_gyro_z']
+
+    return X, y, users, channel_names
 
 
 def _load_dataset_har(prefix=''):
     # load all train
-    trainX, trainy = _load_dataset_group_har('train', prefix + 'HAR_sample' + os.sep)
+    trainX, trainy, trainuser = _load_dataset_group_har('train', prefix + 'HAR_sample' + os.sep)
     # load all test
-    testX, testy = _load_dataset_group_har('test', prefix + 'HAR_sample' + os.sep)
+    testX, testy, testuser = _load_dataset_group_har('test', prefix + 'HAR_sample' + os.sep)
     # zero-offset class values
     trainy = trainy - 1
     testy = testy - 1
     # one hot encode y
-    trainy = to_categorical(trainy)
-    testy = to_categorical(testy)
-    return trainX, trainy, testX, testy
+    trainy = keras.utils.to_categorical(trainy)
+    testy = keras.utils.to_categorical(testy)
+    return trainX, trainy, testX, testy, trainuser, testuser
 
 
 def _load_dataset_group_har(group, prefix=''):
@@ -120,7 +137,9 @@ def _load_dataset_group_har(group, prefix=''):
     X = _load_group_har(filenames, filepath)
     # load class output
     y = _load_file_har(prefix + group + os.sep + 'y_' + group + '.txt')
-    return X, y
+    # load subject output
+    user = _load_file_har(prefix + group + os.sep + 'subject_' + group + '.txt')
+    return X, y, user
 
 
 def _load_group_har(filenames, prefix=''):
