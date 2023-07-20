@@ -1,0 +1,2 @@
+flirt==0.0.2
+attributedict==0.3.0

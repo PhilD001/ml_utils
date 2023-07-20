@@ -3,124 +3,372 @@ import json
 from matplotlib import pyplot as plt
 import numpy as np
 import datetime
+import pickle
+from sklearn import metrics
+from tensorflow.keras.utils import to_categorical
+import tensorflow as tf
+from attributedict.collections import AttributeDict
+
+from definitions import DIR_RESULTS, DIR_ROOT
 
 
-def plot_strips(X, y, label_map, channel_names, pth_save, n_examples=5):
-    """plot n strips in database for each label """
+def subject_wise_split(x, y, participant, subject_wise=True, test_size=0.10, random_state=42):
+    """ Split data into train and test sets via an inter-subject scheme, see:
+    Shah, V., Flood, M. W., Grimm, B., & Dixon, P. C. (2022). Generalizability of deep learning models for predicting outdoor irregular walking surfaces.
+    Journal of Biomechanics, 139, 111159. https://doi.org/10.1016/j.jbiomech.2022.111159
 
-    n_channels = X.shape[1]
-    labels = np.unique(y)
-    for label in labels:
-        res = dict((v, k) for k, v in label_map.items())
-        indx = [i for i in range(len(y)) if y[i] == label]
+    Arguments:
+        x: nd.array, feature space
+        y: nd.array, label class
+        participant: nd.array, participant associated with each row in x and y
+        subject_wise: bool, choices {True, False}, default = True. True = subject-wise split approach, False random-split
+        test_size: float, number between 0 and 1. Default = 0.10. percentage spilt for test set.
+        random_state: int. default = 42. Seed selector for numpy random number generator.
+    Returns:
+        x_train: nd.array, train set for feature space
+        x_test: nd.array, test set for feature space
+        y_train: nd.array, train set label class
+        y_test: nd.array, test set label class
+        subject_train: nd.array[string], train set for participants by row of input data
+        subjects_test: nd.array[string[, test set for participants by row of input data
+    """
+    if type(participant) == list:
+        participant = np.asarray(participant, dtype=np.float32)
 
-        if len(indx) < n_examples:
-            n_examples = len(indx)
+    np.random.seed(random_state)
+    if subject_wise:
+        uniq_parti = np.unique(participant)
+        num = np.round(uniq_parti.shape[0] * test_size).astype('int64')
+        np.random.shuffle(uniq_parti)
+        extract = uniq_parti[0:num]
+        test_index = np.array([], dtype='int64')
+        for j in extract:
+            test_index = np.append(test_index, np.where(participant == j)[0])
+        train_index = np.delete(np.arange(len(participant)), test_index)
+        np.random.shuffle(test_index)
+        np.random.shuffle(train_index)
 
-        for i in range(0, n_examples):
-            current_strip = X[indx[i], :, :]
-            current_label = y[indx[i]]
-            current_label_name = res[current_label]
+    else:
+        index = np.arange(len(participant)).astype('int64')
+        np.random.shuffle(index)
+        num = np.round(participant.shape[0] * test_size).astype('int64')
+        test_index = index[0:num]
+        train_index = index[num:]
 
-            fig, axs = plt.subplots(n_channels)
-            for j in range(0, n_channels):
-                current_strip_by_channel = current_strip[j, :]
-                axs[j].plot(current_strip_by_channel)
-                axs[j].set_ylabel(channel_names[j])
-            fig.suptitle('Sample signals for label {} ({})'.format(current_label, current_label_name))
-            fig.savefig(os.path.join(pth_save, "sample_strip_{}_label_{}_{}".format(i, current_label, current_label_name) + ".png"), dpi=600)
+    x_train = x[train_index]
+    x_test = x[test_index]
+    y_train = y[train_index]
+    y_test = y[test_index]
+    subject_train = participant[train_index]
+    subject_test = participant[test_index]
 
-
-def plot_by_label(X, y, y_labels=None, n_examples=10):
-    """ plots signal by label """
-    n_plots = len(np.unique(y))
-    fig, axs = plt.subplots(n_plots)
-    for n in range(0, n_plots):
-        indx = np.where(y == n)[0]
-        if len(indx) < n_examples:
-            n_examples = len(indx)
-        X_by_lbl = X[indx[0:n_examples]]
-        X_by_lbl_reshaped = np.reshape(X_by_lbl, (np.shape(X_by_lbl)[0] * np.shape(X_by_lbl)[1], np.shape(X_by_lbl)[2]))
-
-        axs[n].plot(X_by_lbl_reshaped)
-        xposition = np.linspace(np.shape(X_by_lbl)[1],np.shape(X_by_lbl)[0]*np.shape(X_by_lbl)[1], np.shape(X_by_lbl)[0])
-        for xc in xposition:
-            axs[n].axvline(x=xc, color='k', linestyle='--')
-        if y_labels:
-            axs[n].set_title('label {}'.format(y_labels[n]))
-        else:
-            axs[n].set_title('label {}'.format(n))
-    fig.suptitle('Sample signals by label')
-    plt.show()
+    return x_train, x_test, y_train, y_test, subject_train, subject_test
 
 
-def print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, train_time,
-                            clf_report_train, cm_train, specificity_train,
-                            clf_report_test=None, cm_test=None, specificity_test=None):
-    """print, plot, and results using keras history object and other arguments"""
+def evaluate_model(y_true, y_pred):
+    """ util to group different evaluation metrics
 
-    # create results dir
-    results_dir = os.path.join(os.getcwd(), 'results')
-    if not os.path.exists(results_dir):
-        os.mkdir(results_dir)
+    NOTE: From sklearn documentation : in binary classification, recall of the positive class is also known as
+          “sensitivity”; recall of the negative class is “specificity”.
+          https://scikit-learn.org/stable/modules/generated/sklearn.metrics.classification_report.html
 
-    # save to text file
-    current_model = arg_dict['data'] + '_' + arg_dict['model_name'] + '_' + datetime.datetime.now().strftime('%Y-%m-%d @%H.%M.%S')
-    result_dir_current_model = os.path.join(results_dir, current_model)
-    os.mkdir(result_dir_current_model)
-    with open(os.path.join(result_dir_current_model, 'arguments.txt'), 'w') as file:
+    """
+
+    # check if values are probabilities, then convert
+    if np.ndim(y_pred) == 2:
+        y_pred = np.argmax(y_pred, axis=1)
+        y_true = np.argmax(y_true, axis=1)
+
+    # get number of classes to determine if binary or multiclass problem
+    n_classes = len(np.unique(y_true))
+
+    # confusion matrix
+    cm = metrics.confusion_matrix(y_true, y_pred)
+    
+    # get metrics from confusion matrix
+    metric_dict = get_metrics_from_cm(cm)
+
+    # get other metrics from sklearn
+    metric_dict['accuracy'] = metrics.accuracy_score(y_true, y_pred)
+    metric_dict['accuracy_balanced'] = metrics.balanced_accuracy_score(y_true, y_pred)
+    metric_dict['F1'] = metrics.f1_score(y_true, y_pred, average='weighted')
+    if n_classes > 2:
+        y_true_cat = to_categorical(y_true)
+        y_pred_cat = to_categorical(y_pred)
+        metric_dict['AUC'] = metrics.roc_auc_score(y_true_cat, y_pred_cat, multi_class='ovr')  # one vs other
+    else:
+        metric_dict['AUC'] = metrics.roc_auc_score(y_true, y_pred)
+
+    return metric_dict, cm
+
+
+def get_metrics_from_cm(cm):
+    """ calculates metrics directly from confusion matrix, see:
+    https://towardsdatascience.com/multi-class-classification-extracting-performance-metrics-from-the-confusion-matrix-b379b427a872
+    """
+
+    # extract all variables
+    FP = cm.sum(axis=0) - np.diag(cm)
+    FN = cm.sum(axis=1) - np.diag(cm)
+    TP = np.diag(cm)
+    TN = cm.sum() - (FP + FN + TP)
+    FP = FP.astype(float)
+    FN = FN.astype(float)
+    TP = TP.astype(float)
+    TN = TN.astype(float)
+
+    # compute metrics
+    metric_dict = {}
+
+    # Sensitivity, hit rate, recall, or true positive rate
+    TPR = TP / (TP + FN)
+    metric_dict['sensitivity'] = list(TPR)
+    # metric_dict['sensitivity_average'] = np.mean(TPR)  # calculated by Phil D, seems reasonable
+
+    # Specificity or true negative rate
+    TNR = TN / (TN + FP)
+    metric_dict['specificity'] = list(TNR)
+    # metric_dict['specificity_average'] = np.mean(TNR)  # calculated by Phil D, seems reasonable
+
+    # Precision or positive predictive value
+    # PPV = TP / (TP + FP)
+    # metric_dict['positive predictive value'] = list(PPV)
+    #
+    # # Negative predictive value
+    # NPV = TN / (TN + FN)
+    # metric_dict['negative predictive value'] = list(NPV)
+    #
+    # # Fall out or false positive rate
+    # FPR = FP / (FP + TN)
+    # metric_dict['false positive rate'] = list(FPR)
+    #
+    # # False negative rate
+    # FNR = FN / (TP + FN)
+    # metric_dict['false negative rate'] =  list(FNR)
+    #
+    # # False discovery rate
+    # FDR = FP / (TP + FP)
+    # metric_dict['false discovery rate'] = list(FDR)
+
+    # Overall accuracy for each class
+    # ACC = (TP + TN) / (TP + FP + FN + TN)
+    # metric_dict['accuracy'] = list(ACC)
+
+    # balanced accuracy of sklearn
+    # defined as the average of recall obtained on each class, see:
+    # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.balanced_accuracy_score.html#sklearn.metrics.balanced_accuracy_score
+    # metric_dict['accuracy_balanced'] = BACC
+
+    return metric_dict
+
+
+def create_results_dir(arg_dict):
+    """ create unique directory for each run of a given dataset and model based on run time"""
+
+    if arg_dict['trained_model_path'] is not None:
+        result_dir_current_model= os.path.join(DIR_RESULTS, arg_dict['trained_model_path'])
+    else:
+        # create subdir for current model
+        t = datetime.datetime.now().strftime('%Y-%m-%d_time_%H.%M.%S')
+        model_name = arg_dict['model_name']
+        if type(model_name) == list:
+            model_name = model_name[0]
+        current_model = arg_dict['database'] + '_' + model_name + '_date_' + t
+        result_dir_current_model = os.path.join(DIR_RESULTS, current_model)
+        os.mkdir(result_dir_current_model)
+    return result_dir_current_model
+
+
+def load_trained_model(arg_dict):
+    """load pretrained model from file """
+    # todo : check saving location
+
+    # extract existing arg dict settings
+    trained_model_path = arg_dict['trained_model_path']
+    evaluate_on_test_set = arg_dict['evaluate_on_test_set']
+
+    model_pth = os.path.join(DIR_RESULTS, trained_model_path, 'model')
+    if arg_dict['verbose']:
+        print('loading pre-trained model from {}'.format(trained_model_path))
+    if arg_dict['model_type'] == 'signal':
+        model = tf.keras.models.load_model(model_pth + '.h5')
+        with open(os.path.join(DIR_RESULTS, trained_model_path, 'history.pickle'), "rb") as file_pi:
+            hist = pickle.load(file_pi)
+            history = AttributeDict({'history': hist})
+    elif arg_dict['model_type'] == 'features':
+        model = pickle.load(open(model_pth + '.pickle', 'rb'))
+        history = None
+    else:
+        raise ValueError('Unknown model type {}'.format(arg_dict['model_type']))
+
+    # get saved/original arg_dict and overwrite with possible new values
+    arg_dict = json.load(open(os.path.join(DIR_RESULTS, trained_model_path, 'arguments.txt')))
+    arg_dict['evaluate_on_test_set'] = evaluate_on_test_set
+    arg_dict['trained_model_path'] = trained_model_path
+
+    return model, arg_dict, history
+
+
+def save_args(arg_dict):
+    """ saves argument dictionary to txt"""
+    f = os.path.join(DIR_RESULTS, 'arguments.txt')
+    rel_pth = os.path.relpath(f, DIR_ROOT)
+    if arg_dict['verbose']:
+        print('saving temporary arguments file to: {}'.format(rel_pth))
+    with open(f, 'w') as file:
         file.write(json.dumps(arg_dict))
-    if arg_dict['evaluate_on_test_set']:
-        with open(os.path.join(result_dir_current_model, 'test_results.txt'), 'w') as file:
-            file.write(json.dumps(clf_report_test))
 
-    print('\n******** RESULTS *************************')
-    print('* Data set: {}'.format(arg_dict['data']))
-    if 'Livrable' in arg_dict['data']:
-        print('* Classification: {}'.format(arg_dict['classification']))
-        print('* Channels: {}'.format(arg_dict['channels']))
-        print('* Excluded labels: {}'.format(arg_dict['excluded_labels']))
-        print('* Excluded positions: {}'.format(arg_dict['excluded_positions']))
 
-    print('* Segment shape: {}'.format(arg_dict['segment_shape']))
-    # print('* n secs per sample: {} seconds'.format(arg_dict['window_secs']))
-    print('* n samples: {0}'.format(len(y)))
-    print('* n classes: {0}'.format(len(np.unique(y))))
-    for i in range(0, len(np.unique(y))):
-        print('* lbl {0} ({1}): {2} ({3:.1f}%)'.format(i, list(label_map.keys())[i], np.count_nonzero(y == i),
-                                                       np.count_nonzero(y == i) / len(y) * 100))
+def load_args(verbose=False):
+    """load argument dictionary from text file"""
+    args_path = os.path.join(DIR_RESULTS, 'arguments.txt')
+    f = open(args_path)
+    rel_pth = os.path.relpath(args_path, DIR_ROOT)
+    if verbose:
+        print('loading arguments file from {}'.format(rel_pth))
+    arg_dict = json.load(f)
+    return arg_dict
+
+
+def print_plot_save_results(arg_dict, model_eval_dict_train, model_eval_dict_test, cm_train, cm_test, history, y,
+                            label_map, run_time, model, n_features):
+
+    """print  plot, save results using keras history object and other arguments"""
+
+    # set up results directory for current model
+    results_dir_current_model = create_results_dir(arg_dict)
+    n_classes = len(np.unique(y))
+    print('\n******** RESULTS ************************************************************************************')
+    print('*')
+    print('* Data set description: --------------------------------------------------------')
+    print('* Data set name:          {0}'.format(arg_dict['database']))
+    print('* channel names:          {0}'.format(arg_dict['channel_names']))
+    print('* Segment shape:          {0}'.format(arg_dict['segment_shape']))
+    print('* n samples:              {0}'.format(len(y)))
+    # print('* n channels:             {0}'.format(len(arg_dict['channel_names'])))
+    print('* n classes:              {0}'.format(n_classes))
+    for key, value in label_map.items():
+        print('* lbl {} {:<17} {} ({:.1f}%)'.format(key, '(' + str(value) + '):',
+                                                    np.count_nonzero(y == value),
+                                                    np.count_nonzero(y == value) / len(y) * 100))
+
     print('* ')
-    print('* Model: {}'.format(arg_dict['model_name']))
-    if arg_dict['model_type'] == 'signal':
-        for key, value in history.params.items():
-            print('*    {}: {}'.format(key, value))
-    print('* run time: {0:.2f} seconds'.format(train_time))
-    print('*')
-    print('* training set accuracy:     {0:.1f}%'.format(history.history['accuracy'][-1]*100))
-    print('* validation set accuracy:   {0:.1f}%'.format(history.history['val_accuracy'][-1]*100))
-    if arg_dict['evaluate_on_test_set']:
-        print('* Test set accuracy:         {0:.1f}%'.format(clf_report_test['accuracy'] * 100))
-        print('* Test set F1-score:         {0:.1f}%'.format(clf_report_test['weighted avg']['f1-score'] * 100))
-        print('* Test sensitivity (recall): {0:.1f}%'.format(clf_report_test['weighted avg']['recall'] * 100))
-        print('* Test specificity (FIX THIS):{0:.1f}%'.format(specificity_test * 100))
-
-    print('*')
-    print('* date: {}\n'.format(datetime.datetime.now()))
-    print('* results saved to {}'.format(result_dir_current_model))
-    print('**************************************************\n')
+    print('* Model details: -----------------------------------------------------------------')
+    print('* Model:                  {0}'.format(arg_dict['model_name']))
+    print('* type:                   {0}'.format(arg_dict['model_type']))
+    print('* tune:                   {0}'.format(arg_dict['tune']))
+    if arg_dict['tune']:
+        print('* evaluation metric:              {0}'.format(arg_dict['evaluation_metric']))
 
     if arg_dict['model_type'] == 'signal':
-        plt_history = plot_train_val_acc_loss(history)
-        plt_history.savefig(os.path.join(result_dir_current_model, 'train_val_acc_loss.png'))
+        # todo : find better way to show all parser arguments for deep learning
+        model.summary()
+    else:
+        print('* feature_selection:      {0}'.format(arg_dict['feature_selection']))
+        print('* number of features:     {0}'.format(n_features))
+    print('*')
 
-    target_names = label_map.keys()
-    if arg_dict['evaluate_on_test_set']:
-        plt_cm = plot_confusion_matrix(cm_test, target_names, title='Test CM: {0} classes, {1} channels,  {2} sec window, accuracy {3:.1f}%'
-                                       .format(len(np.unique(y)), arg_dict['channels'], arg_dict['window_secs'], clf_report['accuracy'] * 100))
-        plt_cm.savefig(os.path.join(result_dir_current_model, 'test_cm.png'))
+    if history is not None:
+        print('*')
+        print('* Model training results ------------------------------------------------------')
+        print('* training (total run) time: {0}'.format(run_time))
+        print('* training set accuracy:     {0:.1f}%'.format(history.history['accuracy'][-1]*100))
+        print('* validation set accuracy:   {0:.1f}%'.format(history.history['val_accuracy'][-1]*100))
 
-    # create plots of strips
-    # plot_strips(X, y, label_map, channel_names, result_dir_current_model)
+    print('*')
+    print('* Training set evaluation metrics ------------------------------------------------- ')
+    if n_classes == 2:
+        for k, v in model_eval_dict_train.items():
+            if isinstance(v, list):
+                v = v[0]
+            print('* {:<45} {:>5.3f}%'.format(k + ':', v * 100))  # cute alignment
+
+    else:
+        for k, v in model_eval_dict_train.items():
+            if not isinstance(v, float):
+                for i, label in enumerate(label_map.keys()):
+                    print('* {:<45} {:>6.3f}%'.format(k + ' (' + label + '):', v[i]*100))   # cute alignment
+        print('*')
+        for k, v in model_eval_dict_train.items():
+            if isinstance(v, float):
+                print('* {:<45} {:>6.3f}%'.format(k + ':', v * 100))  # cute alignment
+
+    if model_eval_dict_test:
+        print('*')
+        print('* Test set evaluation metrics:------------------------------------------------- ')
+        if n_classes ==2:
+            for k, v in model_eval_dict_test.items():
+                if isinstance(v, list):
+                    v = v[0]
+                print('* {:<45} {:>5.3f}%'.format(k + ':', v * 100))  # cute alignment
+
+        else:
+            for k, v in model_eval_dict_test.items():
+                if not isinstance(v, float):
+                    for i, label in enumerate(label_map.keys()):
+                        print('* {:<45} {:>6.3f}%'.format(k + ' (' + label + '):', v[i] * 100))  # cute alignment
+            print('*')
+            for k, v in model_eval_dict_test.items():
+                if isinstance(v, float):
+                    print('* {:<45} {:>5.3f}%'.format(k + ':', v * 100))  # cute alignment
+
+    print('*')
+
+    # save train results -----------------------------------------------------------------------------------------------
+    if arg_dict['trained_model_path'] is not None:
+        if arg_dict['verbose']:
+            print('* Training results previously saved to: {}'.format(arg_dict['trained_model_path']))
+            print('* arguments: {}'.format(os.path.join(arg_dict['trained_model_path'], 'arguments.txt')))
+            if history:
+                print('* history: {}'.format(os.path.join(arg_dict['trained_model_path'], 'history.txt')))
+            print('* train results: {}'.format(os.path.join(arg_dict['trained_model_path'], 'train_results.txt')))
+            print('* train cm: {}'.format(os.path.join(arg_dict['trained_model_path'], 'train_cm.png')))
+
+    else:
+        if arg_dict['verbose']:
+            print('* results saved to: {}'.format(results_dir_current_model))
+
+        with open(os.path.join(results_dir_current_model, 'arguments.txt'), 'w') as file:
+            file.write(json.dumps(arg_dict))
+
+        if model_eval_dict_train:
+            with open(os.path.join(results_dir_current_model, 'train_results.txt'), 'w') as file:
+                file.write(json.dumps(model_eval_dict_train))
+            plt_cm = plot_confusion_matrix(cm_train, label_map.keys(),
+                                           title='Train CM: {0} channels, AUC {1:.1f}%'
+                                           .format(len(arg_dict['channel_names']),
+                                                   model_eval_dict_train['AUC'] * 100))
+            plt_cm.savefig(os.path.join(results_dir_current_model, 'train_cm.png'))
+
+        if arg_dict['model_type'] == 'signal':
+            plt_history = plot_train_val_acc_loss(history)
+            plt_history.savefig(os.path.join(results_dir_current_model, 'train_val_acc_loss.png'))
+
+        # save model
+        model_pth = os.path.join(results_dir_current_model, 'model')
+        if arg_dict['model_type'] == 'signal':
+            if model is not None:
+                model.save(model_pth + '.h5')
+        else:
+            pickle.dump(model, open(model_pth + '.pickle', "wb"))
+
+        # save history file
+        if history is not None:
+            with open(os.path.join(results_dir_current_model, 'history.pickle'), 'wb') as file_pi:
+                pickle.dump(history.history, file_pi)
+
+    if model_eval_dict_test:
+        with open(os.path.join(results_dir_current_model, 'test_results.txt'), 'w') as file:
+            file.write(json.dumps(model_eval_dict_test))
+        plt_cm = plot_confusion_matrix(cm_test, label_map.keys(),
+                                       title='Test CM: {0} channels, AUC {1:.1f}%'
+                                       .format(len(arg_dict['channel_names']),
+                                               model_eval_dict_test['AUC'] * 100))
+        plt_cm.savefig(os.path.join(results_dir_current_model, 'test_cm.png'))
+
+    print('*')
+    print('* Date: {}\n'.format(datetime.datetime.now()))
+    print('*****************************************************************************************************\n')
 
 
 def plot_train_val_acc_loss(history):
@@ -218,7 +466,6 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None,
     if normalize:
         cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
 
-
     thresh = cm.max() / 1.5 if normalize else cm.max() / 2
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
         if normalize:
@@ -230,16 +477,10 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None,
                      horizontalalignment="center",
                      color="white" if cm[i, j] > thresh else "black")
 
-
     plt.tight_layout()
     plt.ylabel('True label')
     plt.xlabel('Predicted label\naccuracy={:0.4f}; misclass={:0.4f}'.format(accuracy, misclass))
     return plt
 
 
-if __name__ == "__main__":
-    # for testing
-    from processing.processing import load_keras_sample_time_series_db
-    X, y, _ = load_keras_sample_time_series_db()
-    #plot_by_label(X, y)
-    plot_strips(X, y)
+

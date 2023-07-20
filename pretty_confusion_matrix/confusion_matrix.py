@@ -65,5 +65,5 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=None,
 if __name__ == '__main__':
     # an example
     import numpy as np
-    cm = np.array([[78, 4], [2, 80]])
-    plot_confusion_matrix(cm, target_names=['category 1', 'category 2'])
+    cm = np.array([[339, 36, 12], [56, 112, 26], [18, 14, 499]])
+    plot_confusion_matrix(cm, target_names=['cough', 'other', 'respiration'])

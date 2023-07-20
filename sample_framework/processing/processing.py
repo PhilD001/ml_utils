@@ -1,12 +1,15 @@
 import os
+import random
 import numpy as np
+from scipy import signal
 import pandas as pd
 from tensorflow import keras
+
 from definitions import DIR_DATA
 
 
-def load_database(db_name, channels='all'):
-    """ provides access to database db_name
+def load_database(arg_dict):
+    """ provides access to database
 
     Note:
     - Regarding organization of data tensors, Chollet, Deep Learning with Python, section 2.2.10m recommends:
@@ -14,17 +17,18 @@ def load_database(db_name, channels='all'):
     an explicit time axis. Each sample can be encoded as a sequence of vectors (a 2D tensor), and thus a batch of data
     will be encoded as a 3D tensor (see figure 2.3)."
     """
-
-    if channels != 'all':
-        raise NotImplementedError
-
-    if db_name == 'keras_sample':
-        X, y, user, channel_names = load_keras_sample_time_series_db()
-    elif db_name == 'HAR_sample':
-        X, y, user, channel_names = load_har_db()
+    conditions = None
+    if arg_dict['database'] == 'keras_sample':
+        X, y, user, channel_names, meta_data = load_keras_sample_time_series_db()
+    elif arg_dict['database'] == 'HAR_sample':
+        X, y, user, channel_names, meta_data = load_har_db(channel_names=arg_dict['channel_names'])
     else:
-        raise NotImplementedError('database {} not supporte'.format(db_name))
-    return X, y, user, channel_names
+        raise NotImplementedError('database {} not supported'.format(arg_dict['database']))
+
+    # overwrite channel names if required
+    arg_dict['channel_names'] = channel_names
+
+    return X, y, user, channel_names, conditions, meta_data
 
 
 def load_keras_sample_time_series_db():
@@ -77,23 +81,30 @@ def load_keras_sample_time_series_db():
         np.save(os.path.join(DIR_DATA, 'keras_sample', 'y'), y)
 
     # get users
-    users = None
+    users = np.arange(0, len(y), 1)
     channel_names = ['motor_noise']
-    return X, y, users, channel_names
+    meta_data = dict(freq=1)
+    return X, y, users, channel_names, meta_data
 
 
-def load_har_db():
+def load_har_db(channel_names='all'):
     """" loads the UCL human activity recognition dataset
-    see: https://machinelearningmastery.com/how-to-develop-rnn-models-for-human-activity-recognition-time-series-classification/
-
+    see:
+    sample loading code: https://machinelearningmastery.com/how-to-develop-rnn-models-for-human-activity-recognition-time-series-classification/
+    database info: https://archive.ics.uci.edu/dataset/240/human+activity+recognition+using+smartphones
     """
     pth = os.path.join(DIR_DATA + os.sep)
     if len(os.listdir(pth)) == 0:
         raise IOError('please download and unzip the HAR dataset from '
                       'https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip')
 
+    if channel_names == 'all':
+        channel_names = ['total_acc_x', 'total_acc_y', 'total_acc_z',
+                         'body_acc_x', 'body_acc_y', 'body_acc_z',
+                         'body_gyro_x', 'body_gyro_y', 'body_gyro_z']
+
     # extract train and test set data
-    X_train, y_train, X_test, y_test, user_train, user_test = _load_dataset_har(pth)
+    X_train, y_train, X_test, y_test, user_train, user_test = _load_dataset_har(channel_names, pth)
 
     # merge (splitting will occur later)
     X = np.vstack((X_train, X_test))
@@ -103,17 +114,25 @@ def load_har_db():
     # undo categorical
     y = np.argmax(y, axis=1)
 
-    channel_names = ['total_acc_x', 'total_acc_y', 'total_acc_z', 'body_acc_x',  'body_acc_y', 'body_acc_z',
-                     'body_gyro_x',  'body_gyro_y', 'body_gyro_z']
+    # convert to class names (see activity_labels.txt)
+    # labels are 1 less than in activity_labels file to account for 0 label
+    y = [str(lbl) for lbl in y]
+    y = ['walking' if item == '0' else item for item in y]
+    y = ['walking_upstairs' if item == '1' else item for item in y]
+    y = ['walking_downstairs' if item == '2' else item for item in y]
+    y = ['sitting' if item == '3' else item for item in y]
+    y = ['standing' if item == '4' else item for item in y]
+    y = ['laying' if item == '5' else item for item in y]
 
-    return X, y, users, channel_names
+    meta_data = dict(freq=50)
+    return X, y, users, channel_names, meta_data
 
 
-def _load_dataset_har(prefix=''):
+def _load_dataset_har(channel_names, prefix=''):
     # load all train
-    trainX, trainy, trainuser = _load_dataset_group_har('train', prefix + 'HAR_sample' + os.sep)
+    trainX, trainy, trainuser = _load_dataset_group_har('train', channel_names, prefix + 'HAR_sample' + os.sep)
     # load all test
-    testX, testy, testuser = _load_dataset_group_har('test', prefix + 'HAR_sample' + os.sep)
+    testX, testy, testuser = _load_dataset_group_har('test', channel_names, prefix + 'HAR_sample' + os.sep)
     # zero-offset class values
     trainy = trainy - 1
     testy = testy - 1
@@ -123,16 +142,16 @@ def _load_dataset_har(prefix=''):
     return trainX, trainy, testX, testy, trainuser, testuser
 
 
-def _load_dataset_group_har(group, prefix=''):
+def _load_dataset_group_har(group, channel_names, prefix=''):
     filepath = prefix + group + os.sep + 'Inertial Signals' + os.sep
     # load all 9 files as a single array
     filenames = list()
-    # total acceleration
-    filenames += ['total_acc_x_'+group+'.txt', 'total_acc_y_'+group+'.txt', 'total_acc_z_'+group+'.txt']
-    # body acceleration
-    filenames += ['body_acc_x_'+group+'.txt', 'body_acc_y_'+group+'.txt', 'body_acc_z_'+group+'.txt']
-    # body gyroscope
-    filenames += ['body_gyro_x_'+group+'.txt', 'body_gyro_y_'+group+'.txt', 'body_gyro_z_'+group+'.txt']
+    if 'total_acc_x' in channel_names:
+        filenames += ['total_acc_x_'+group+'.txt', 'total_acc_y_'+group+'.txt', 'total_acc_z_'+group+'.txt']
+    if 'body_acc_x' in channel_names:
+        filenames += ['body_acc_x_'+group+'.txt', 'body_acc_y_'+group+'.txt', 'body_acc_z_'+group+'.txt']
+    if 'body_gyro_x' in channel_names:
+        filenames += ['body_gyro_x_'+group+'.txt', 'body_gyro_y_'+group+'.txt', 'body_gyro_z_'+group+'.txt']
     # load input data
     X = _load_group_har(filenames, filepath)
     # load class output
@@ -165,21 +184,6 @@ def _readucr(filename):
     x = data[:, 1:]
     return x, y.astype(int)
 
-
-def load_arrays(pth_save, flags):
-    """loads arrays created by extract_arrays_from_dict"""
-    try:
-        X = np.load(os.path.join(pth_save, 'X_{}.npy'.format(flags)))
-        y = np.load(os.path.join(pth_save, 'y_{}.npy'.format(flags)))
-        c = np.load(os.path.join(pth_save, 'c_{}.npy'.format(flags)))
-        s = np.load(os.path.join(pth_save, 's_{}.npy'.format(flags)))
-    except FileNotFoundError:
-        X = None
-        y = None
-        c = None
-        s = None
-
-    return X, y, c, s
 
 
 

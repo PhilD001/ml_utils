@@ -1,18 +1,14 @@
 import numpy as np
+import os
 import time
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, recall_score
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 from tensorflow import keras
 
 from processing.processing import load_database
-from machine_learning.models import build_model, build_model_tune, set_keras_callbacks
-from utils.utils import print_plot_save_results
-from feature_engineering.features import make_feature_vector
-
-
-# todo: look at LSTM CNN models
-# https://machinelearningmastery.com/how-to-develop-rnn-models-for-human-activity-recognition-time-series-classification
+from machine_learning.models import build_model, tune_keras_model, set_keras_callbacks, tune_sklearn_model
+from utils.utils import print_plot_save_results, evaluate_model, load_trained_model, save_args, subject_wise_split
+from feature_engineering.features import extract_features, feature_selection
+from definitions import DIR_RESULTS, RANDOM_STATE
 
 
 def main(arg_dict):
@@ -23,28 +19,29 @@ def main(arg_dict):
     Returns
         None
     """
+    # 0 - SET UP -------------------------------------------------------------------------------------------------------
+    # set up root results directory (first run only)
+    if not os.path.exists(DIR_RESULTS):
+        os.mkdir(DIR_RESULTS)
 
-    # LOAD DATA --------------------------------------------------------------------------------------------------------
+    # 1 - LOAD DATA ----------------------------------------------------------------------------------------------------
     # - shape of data should be (samples, frames, channels), see Deep Learning with Python p 36
     start_time = time.time()
-    X, y, user, channel_names = load_database(arg_dict['data'], arg_dict['channels'])
+    X, y, user, ch_names, conditions, meta_data = load_database(arg_dict)
 
     # encode labels
     le = LabelEncoder()
     y = le.fit_transform(y)
     label_map = {l: i for i, l in enumerate(le.classes_)}
 
-    # TRAIN/TEST SPLIT DATA --------------------------------------------------------------------------------------------
-    # # todo: add choice to do subject wise split
-    if arg_dict['train_test_split_by_user']:
-        raise NotImplementedError
-    else:
-        indices = np.arange(len(y))
-        X_train, X_test, y_train, y_test, index_train, index_test = train_test_split(X, y, indices,
-                                                                                     test_size=arg_dict['test_ratio'],
-                                                                                     random_state=42)
+    # 2 - TRAIN/TEST SPLIT DATA ----------------------------------------------------------------------------------------
+    by_subject = arg_dict['train_test_split_by_user']
+    test_size = arg_dict['test_ratio']
+    X_train, X_test, y_train, y_test, sub_train, sub_test = subject_wise_split(X, y, user, subject_wise=by_subject,
+                                                                               test_size=test_size,
+                                                                               random_state=RANDOM_STATE)
 
-    # SCALE DATA -------------------------------------------------------------------------------------------------------
+    # 3 - SCALE DATA ---------------------------------------------------------------------------------------------------
     # -In the interest of preventing information about the distribution of the test set leaking into your model, you
     #  should fit the scaler on your training data only, then standardise both training and test sets with that scaler.
     # - tensor data (samples x channels x frames) must be reshaped for scaling tool
@@ -52,167 +49,161 @@ def main(arg_dict):
     X_train = sc.fit_transform(X_train.reshape(-1, X_train.shape[-1])).reshape(X_train.shape)
     X_test = sc.transform(X_test.reshape(-1, X_test.shape[-1])).reshape(X_test.shape)
 
-    # ADD SOME INFO TO ARGS_DICT ---------------------------------------------------------------------------------------
-    args_dict['segment_shape'] = X_test.shape[1::]
-    args_dict['n classes'] = len(np.unique(y_test))
+    # add information to args_dict that will be used later
+    arg_dict['segment_shape'] = X_test.shape[1::]
+    arg_dict['n_classes'] = len(np.unique(y_test))
+    save_args(arg_dict)
 
-    # SELECT MODEL TYPE ------------------------------------------------------------------------------------------------
+    # 4 - SELECT MODEL TYPE (FEATURE VS SIGNAL) ------------------------------------------------------------------------
+    n_features = None
     if arg_dict['model_type'] == 'features':
-        # only works for acceleration for now
-        print("\ncomputing features...".format(X_train.shape[1]))
 
-        X_train, feature_names = make_feature_vector(X_train, channel_names, te=1 / 50)
-        X_test, _ = make_feature_vector(X_test, channel_names, te=1 / 50)
+        # 4 A: FEATURE-BASED MODEL -------------------------------------------------------------------------------------
+        freq = meta_data['freq']
+        X_test, feat_names = extract_features(X_test, ch_names, freq, feature_set='test',
+                                              force_recompute=arg_dict['force_recompute_features'],
+                                              verbose=arg_dict['verbose'])
+        X_train, _ = extract_features(X_train, ch_names, freq, feature_set='train',
+                                      force_recompute=arg_dict['force_recompute_features'], verbose=arg_dict['verbose'])
 
-        print("computed {} features".format(X_train.shape[1]))
+        # Feature selection
+        if arg_dict['feature_selection']:
+            X_train, X_test, feat_names = feature_selection(X_train, X_test, feat_names, verbose=arg_dict['verbose'])
 
-        grid_search = build_model(model_name=arg_dict['model_name'])
+        # save number of features
+        n_features = len(feat_names)
 
-        # execute search for hyperparameters
-        print('executing search for best hyperparameters on the training set...')
-        grid_result = grid_search.fit(X_train, y_train)
+        # Train model (or load pre-trained model)
+        if arg_dict['trained_model_path']:
+            model, arg_dict, history = load_trained_model(arg_dict)
+        else:
+            if arg_dict['tune']:
+                model, arg_dict = tune_sklearn_model(X_train, y_train, arg_dict)
+            else:
+                model = build_model(arg_dict['model_name'])
 
-        # summarize result
-        print('Best Accuracy Score (train)= {0:.3f} %'.format(grid_result.best_score_*100))
-        print('Best Hyperparameters (train): {}'.format(grid_result.best_params_))
-
-        # implement best model
-        model = build_model(model_name=arg_dict['model_name'], grid_results=grid_result)
-        model.fit(X_train, y_train)
-
-        # create a "fake" history object for reporting results in a similar style to tensorflow models
-        history = {}
-        history['history'] = {}
-        history['history']['accuracy'] = [grid_result.best_score_]
-        history['history']['val_accuracy'] = [0]
-        #history = AttrDict(history)
+            model.fit(X_train, y_train)
+            history = None
 
     else:
 
-        # ONE HOT ENCODE LABELS ----------------------------------------------------------------------------------------
+        # 4 B: SIGNAL BASED MODEL --------------------------------------------------------------------------------------
+
+        # One hot encode labels
         y_train = keras.utils.to_categorical(y_train)
         y_test = keras.utils.to_categorical(y_test)
 
-        # TRAIN MODEL --------------------------------------------------------------------------------------------------
+        # Train model (or load pre-trained model)
         input_shape = X.shape[1::]
         n_classes = len(np.unique(y_train, axis=0))
-        epochs = arg_dict['epochs']
-        batch_size = arg_dict['batch_size']
 
-        callback = set_keras_callbacks(early_stop_patience=arg_dict['patience'])
-
-        if args_dict['tune']:
-
-            # initialize a tuner (here, RandomSearch). We use objective to specify the objective to select the best
-            # models, and we use max_trials to specify the number of different models to try.
-
-            tuner = kt.RandomSearch(hypermodel=build_model_tune,     # tuning options set in build_model_tune function
-                                    objective='val_loss',
-                                    max_trials=3,
-                                    overwrite=True,
-                                    directory='keras_tune_results')
-
-            # start the search (always with early stop)
-            tuner.search(X_train, y_train, validation_split=0.2, epochs=5, callbacks=callback)
-
-            # extract best model
-            model = tuner.get_best_models(num_models=1)[0]
-
-            # print summary
-            tuner.results_summary()
-
+        if arg_dict['trained_model_path']:
+            model, arg_dict, history = load_trained_model(arg_dict)
         else:
-            model = build_model(model_name=args_dict['model_name'], n_classes=n_classes, input_shape=input_shape,
-                                units=arg_dict['n_filts'], n_layers=args_dict['n_layers'], dropout=arg_dict['dropout'],
-                                regularizer=args_dict['regularizer'], dropout_amt=arg_dict['dropout_amt'])
+            if arg_dict['early_stop']:
+                callback = set_keras_callbacks(early_stop_patience=arg_dict['patience'])
+            else:
+                callback = []
 
-        # train or retrain (for tuned model)
-        if arg_dict['early_stop']:
-            history = model.fit(X_train, y_train, batch_size=batch_size, epochs=epochs,  validation_split=0.2, verbose=1,
-                                callbacks=callback)
-        else:
-            history = model.fit(X_train, y_train, batch_size=batch_size, epochs=epochs, validation_split=0.2, verbose=1)
+            if arg_dict['tune']:
+                # initialize a tuner (here, RandomSearch). We use objective to specify the objective to select the best
+                # models, and we use max_trials to specify the number of different models to try.
+                # see : https://www.tensorflow.org/tutorials/keras/keras_tuner
+                model, arg_dict = tune_keras_model(X_train, y_train, arg_dict, callback)
+            else:
+                units_input = arg_dict['n_filts_input']
+                units_inner = arg_dict['n_filts_inner']
+                units_output = arg_dict['n_filts_output']
+                n_layers = arg_dict['n_layers']
+                dropout = arg_dict['dropout']
+                dropout_amt = arg_dict['dropout_amt']
+                regularizer = arg_dict['regularizer']
+                kernel_size = arg_dict['kernel_size']
+                post_conv_layer = arg_dict['post_conv_layer']
+
+                model = build_model(model_name=arg_dict['model_name'], n_classes=n_classes, input_shape=input_shape,
+                                    units_input=units_input, units_inner=units_inner, units_output=units_output,
+                                    n_layers=n_layers, dropout=dropout, dropout_amt=dropout_amt,
+                                    regularizer=regularizer, kernel_size=kernel_size,  post_conv_layer=post_conv_layer)
+
+            # train or retrain (for tuned model)
+            history = model.fit(X_train, y_train, batch_size=arg_dict['batch_size'], epochs=arg_dict['epochs'],
+                                validation_split=arg_dict['validation_ratio'], verbose=1, callbacks=callback)
 
     y_pred_train = model.predict(X_train)
-    if np.ndim(y_pred_train) == 2:
-        y_pred_train = np.argmax(y_pred_train, axis=1)
-        y_train = np.argmax(y_train, axis=1)
 
-    specificity_train = recall_score(y_train, y_pred_train, pos_label=0, average='weighted')  # https://stackoverflow.com/questions/33275461/specificity-in-scikit-learn
-    clf_report_train = classification_report(y_train, y_pred_train, output_dict=True)
-    cm_train = confusion_matrix(y_train, y_pred_train)
+    # 5 - EVALUATE TRAINED MODEL ---------------------------------------------------------------------------------------
+    model_eval_dict_train, cm_train = evaluate_model(y_train, y_pred_train)
 
-    # EVALUATE MODEL ON TEST SET --------------------------------------------------------------------------------------
-    # - You should not tune your model to improve the score on the test set.
-    # - see Chollet, Deep Learning with Python, p97
+    # 6 - EVALUATE MODEL ON TEST SET -----------------------------------------------------------------------------------
+    # - You should not tune your model to improve the score on the test set, see Chollet, Deep Learning with Python, p97
+    model_eval_dict_test = {}
     cm_test = None
-    clf_report_test = None
-    specificity_test = None
-    if args_dict['evaluate_on_test_set']:
-        #todo : save the previously trained model to avoid running again?
-        y_pred = model.predict(X_test)
-    # else:
-    #     y_pred = model.predict(X_train)
-    #     y_test = y_train    # just used to simplify the code later, in the final run, evaluation is done on real test
+    if arg_dict['evaluate_on_test_set']:
+        y_pred_test = model.predict(X_test)
+        model_eval_dict_test, cm_test = evaluate_model(y_test, y_pred_test)
 
-        if np.ndim(y_pred) == 2:
-            y_pred = np.argmax(y_pred, axis=1)
-            y_test = np.argmax(y_test, axis=1)
-
-        specificity_test = recall_score(y_test, y_pred, pos_label=0, average='weighted')# https://stackoverflow.com/questions/33275461/specificity-in-scikit-learn
-        clf_report_test = classification_report(y_test, y_pred, output_dict=True)
-        cm_test = confusion_matrix(y_test, y_pred)
-
-    # DISPLAY RESULTS FOR USER -----------------------------------------------------------------------------------------
-    run_time = time.time() - start_time
-    print_plot_save_results(arg_dict, history, X, y, channel_names, label_map, run_time, clf_report_train, cm_train,
-                            specificity_train, clf_report_test, cm_test, specificity_test)
+    # 7 - PRINT PLOT, SAVE RESULTS AND MODELS --------------------------------------------------------------------------
+    elapsed_time = (time.time() - start_time)  # in hours
+    run_time = time.strftime("%Hh%Mm%Ss", time.gmtime(elapsed_time))
+    print_plot_save_results(arg_dict, model_eval_dict_train, model_eval_dict_test, cm_train, cm_test, history, y,
+                            label_map, run_time, model, n_features)
 
 
 if __name__ == '__main__':
     # todo create a settings file
     import argparse
-    parser = argparse.ArgumentParser(description="sample ml framework ")
-    parser.add_argument('--data', default='keras_sample', choices={'keras_sample', 'HAR_sample'})
+    parser = argparse.ArgumentParser(description="Cough Detection Project")
 
-    # preprocessing arguments
-    parser.add_argument('--channels', type=str, default='all', help='select all or a subset of channels by name')
+    # Data set arguments
+    parser.add_argument('--database', default='keras_sample', choices={'keras_sample', 'HAR_sample'})
+    parser.add_argument('--channel_names', nargs='+', default='all')
+
+    # General arguments
+    parser.add_argument('--verbose', default=False, action='store_true', help='use flag to print information to screen')
 
     # arguments for choosing train/test split **************************************************************************
-    parser.add_argument('--train_test_split_by_user', type=bool, default=False)
+    parser.add_argument('--train_test_split_by_user', default=False, action='store_true')
     parser.add_argument('--test_ratio', type=float, default=0.2)
-    parser.add_argument('--validation_size', type=int, default=0.2)
-    parser.add_argument('--evaluate_on_test_set', type=bool, default=False, help='only set to true after model tuning')
+    parser.add_argument('--evaluate_on_test_set', default=False, action='store_true', help='after train')
+    parser.add_argument('--trained_model_path', type=str, default=None, help='path to pre-trained model in results dir')
 
     # arguments for selection model type *******************************************************************************
-    parser.add_argument('--model_name', type=str, default='cnn', help='see models.py for all choices',
-                        choices={'cnn', 'svc'})
+    parser.add_argument('--model_name', nargs='+', default=['random_forest', 'svc'], help='see models.py for all choices')
 
     # arguments for feature engineering ********************************************************************************
-    parser.add_argument('--feature_selection', action='store_true')
-    parser.add_argument('--feature_set', default='minimal', choices=['minimal', 'efficient', 'comprehensive'])
+    parser.add_argument('--feature_selection', default=False, action='store_true')
+    parser.add_argument('--save_features', default=True, action='store_true', help='save to disk for quick reload')
+    parser.add_argument('--force_recompute_features', default=False, action='store_true', help='ignore save, recompute')
 
     # arguments for deep learning models only **************************************************************************
     parser.add_argument('--epochs', type=int, default=500)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--n_filts', type=int, default=64)
+    parser.add_argument('--n_filts_input', type=int, default=64)
+    parser.add_argument('--n_filts_inner', type=int, default=64)
+    parser.add_argument('--n_filts_output', type=int, default=64)
     parser.add_argument('--n_layers', type=int, default=1)
-    parser.add_argument('--patience', type=int, default=50)
+    parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--early_stop', default=False, action='store_true')
     parser.add_argument('--dropout', default=False, action='store_true')
     parser.add_argument('--dropout_amt', type=float, default=0.3, help='dropout ratio, must be [0,1]')
     parser.add_argument('--regularizer', type=str, default=None, choices=['L1', 'L2', None], help='keras regularizer')
     parser.add_argument('--regularizer_amt', type=float, default=0.01)
+    parser.add_argument('--kernel_size', type=int, default=3)
+    parser.add_argument('--post_conv_layer', type=str, default='batch_normalize', choices=['batch_normalize', 'max_pool'])
+    parser.add_argument('--validation_ratio', type=int, default=0.2)
 
-    # tuning stuff
-    parser.add_argument('--tune', default=False, action='store_true')
+    # Model arguments
+    parser.add_argument('--tune', default=False, action='store_true', help='automatic parameter tuning during training')
+    parser.add_argument('--evaluation_metric', default='accuracy', help='metric for tuning')
 
     args = parser.parse_args()
     args_dict = vars(args)
 
     # Check model type : It will return True if any of the substrings in substring_list is contained in string.
-    substring_list = ['cnn', 'lstm']
-    if any(substring in args_dict['model_name'] for substring in substring_list):  args_dict['model_type'] = 'signal'
+    substring_list = ['cnn', 'lstm', 'imagenet']
+    if any(substring in args_dict['model_name'] for substring in substring_list):
+        args_dict['model_type'] = 'signal'
     else:
         args_dict['model_type'] = 'features'
 
