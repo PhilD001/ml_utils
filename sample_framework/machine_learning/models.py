@@ -1,16 +1,18 @@
 import os
+
 import numpy as np
 import shutil
 from sklearn import metrics
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.neural_network import MLPClassifier
 from tensorflow import keras
+import tensorflow as tf
 import keras_tuner as kt
-from sample_framework.definitions import DIR_RESULTS, RANDOM_STATE
-from sample_framework.utils.utils import load_args
+from definitions import DIR_RESULTS, RANDOM_STATE
+from utils.utils import load_args
 
 
 def build_model(model_name, grid_results=None, n_classes=None, input_shape=None, units_input=None, units_inner=None,
@@ -36,32 +38,39 @@ def build_model(model_name, grid_results=None, n_classes=None, input_shape=None,
     return model
 
 
-def tune_keras_model(X_train, y_train, arg_dict, callback):
-    """ see tutorial here:
+def tune_keras_model(X_train, y_train, arg_dict, callback, max_trials=20, executions_per_trial=2, overwrite=True):
+    """
+
+
+    see tutorial here:
     https://neptune.ai/blog/keras-tuner-tuning-hyperparameters-deep-learning-model
+
+    for use of custom metric, see here: https://github.com/keras-team/keras-tuner/issues/263
     """
 
     # set evaluation metric for tuning
-    # todo : implement tuner by custom metric
+    eval_metric = arg_dict['evaluation_metric'].lower()
+    if eval_metric == 'accuracy':
+        direction = 'max'
+    elif eval_metric == 'auc':
+        direction = 'max'
+    else:
+        raise NotImplementedError('evaluation metric {} not implemented'.format(eval_metric))
 
-    tuner = kt.Hyperband(hypermodel=build_keras_model_tune,  # tuning options set in build_model_tune function
-                         objective=kt.Objective('accuracy', direction='max'),
-                         max_epochs=int(np.ceil(arg_dict['epochs']*1.1)),  # set higher than expected epochs to converg
-                         hyperband_iterations=1,                           # set as high as you can afford!
-                         overwrite=True,
-                         factor=3,
-                         directory=DIR_RESULTS,
-                         project_name='keras_tuner_results_temp',
-                         )
-
-    # Define the OracleCallback to display current objective metric value
-    # oracle_callback = keras.callbacks.TensorBoard("/tmp/tb_logs")
+    tuner = kt.RandomSearch(build_keras_model_tune,
+                            objective=kt.Objective('val_' + eval_metric, direction=direction),  # metric to optimize
+                            max_trials=max_trials,
+                            executions_per_trial=executions_per_trial,  # run several for best evaluation due to effect of random initial
+                            directory=DIR_RESULTS,
+                            project_name='keras_tuner_results_temp',
+                            overwrite=overwrite,                       # always overwrite to avoid loading outdated tune results
+                            seed=RANDOM_STATE,)
 
     # start the search (always with early stop)
     tuner.search(X_train, y_train,
                  validation_split=arg_dict['validation_ratio'],
                  epochs=arg_dict['epochs'],
-                 callbacks=[callback],
+                 callbacks=callback,
                  )
 
     # Get the optimal hyperparameters and build an untrained model
@@ -86,7 +95,7 @@ def tune_sklearn_model(X_train, y_train, arg_dict, cv_folds=5):
     eval_metric = arg_dict['evaluation_metric']
     if eval_metric == 'accuracy':
         metric = metrics.accuracy_score
-    elif eval_metric == 'roc_auc_score':
+    elif eval_metric == 'auc':
         metric = metrics.roc_auc_score
     else:
         raise NotImplementedError
@@ -123,13 +132,24 @@ def build_sklearn_model_tune(hp):
         max_feats = hp.Choice('max_features', values=['auto', 'sqrt', 'log2'])
         max_depth = hp.Int('max_depth', min_value=1, max_value=20, step=1)
         n = hp.Int('n_estimators', min_value=10, max_value=50, step=2)
+        # add new parameters to tune
+        criterion = hp.Choice('criterion', values=['gini', 'entropy', 'log_loss'])
+        min_samples_split = hp.Int('min_samples_split ', min_value=1, max_value=10, step=1)
+        class_weight = hp.Choice('class_weight', values=['balanced', 'balanced_subsample'])
+
         model = RandomForestClassifier(n_estimators=n, max_features=max_feats, max_depth=max_depth,
                                        min_samples_leaf=min_samp_leaf,
+                                       criterion=criterion,
+                                       min_samples_split=min_samples_split,
+                                       class_weight=class_weight,
                                        random_state=RANDOM_STATE)
 
     elif model_type == 'svc':
         kernel = hp.Choice('kernel', values=['linear', 'rbf', 'poly'])
         gamma = hp.Float('gamma', min_value=1e-3, max_value=1, sampling="log")
+        # C = hp.Float('C', min_value=1e-2, max_value=1000, sampling="log")
+        # degree = hp.Int("degree", min_value=1, max_value=6, step=1)
+        # model = SVC(kernel=kernel, gamma=gamma, C=C, degree=degree)
         model = SVC(kernel=kernel, gamma=gamma)
     elif model_type == 'gradient_boosting':
         max_depth = hp.Int("max_depth", min_value=1, max_value=10, step=1)
@@ -166,33 +186,6 @@ def build_keras_model_tune(hp):
                 kernel_regularizer=kernel_regularizer, post_conv_layer=post_conv_layer, lr=lr)
 
     return model
-
-
-def train_tune_feature_model(args_dict, X, y):
-
-    # choose model
-    if 'decision_tree' in args_dict['model_name']:
-        model = DecisionTreeClassifier(random_state=0)
-        hyper_params = dict()
-        hyper_params['criterion'] = ['gini', 'entropy']
-        hyper_params['min_samples_split'] = [2, 4, 6, 8, 10]
-        hyper_params['max_depth'] = [2, 4, 6, 8, 10]
-
-    elif 'svc' in args_dict['model_name']:
-        model = SVC(random_state=0)
-        hyper_params = dict()
-        hyper_params['kernel'] = ['rbf', 'sigmoid']
-        hyper_params['gamma'] = [1, 0.1, 0.01, 0.001]
-        hyper_params['C'] = [1, 2, 3, 4, 5, 10]
-    else:
-        raise NotImplementedError
-
-    # grid search
-    print('tuning {} model based on following hyper parameters:'.format(args_dict['model_name']))
-    print(hyper_params)
-    search = GridSearchCV(model, hyper_params, scoring='accuracy')
-    models = search.fit(X, y)
-    return models
 
 
 def random_forest(grid_results=None):
@@ -254,17 +247,29 @@ def lstm(units=100, activation='relu', lr=0.001, dropout=False, n_classes=3, inp
 
 def cnn(units_input=64, units_inner=64, units_output=64, activation='relu', lr=0.001, dropout=False, n_layers=3,
         n_classes=None, input_shape=None, kernel_size=3, dropout_amt=0.2, kernel_regularizer=None,
-        kernel_regularizer_amt=0.01, post_conv_layer='batch_normalize'):
+        kernel_regularizer_amt=0.01, post_conv_layer='batch_normalize', evaluation_metric=None):
     """a keras CNN ample time series model rewritten from keras
        see: https://keras.io/examples/timeseries/timeseries_classification_from_scratch/
     """
 
-    # get shape of data
+    # get relevant information from saved dict
     arg_dict = load_args()
     if input_shape is None:
         input_shape = tuple(arg_dict['segment_shape'])
     if n_classes is None:
         n_classes = arg_dict['n_classes']
+    if evaluation_metric is None:
+        evaluation_metric = arg_dict['evaluation_metric']
+
+    # set correct evaluation metric
+    if evaluation_metric == 'auc':
+        metric = tf.keras.metrics.AUC(name='auc')
+    elif evaluation_metric == 'accuracy':
+        metric = tf.keras.metrics.AUC(name='accuracy')
+    elif evaluation_metric == 'recall':
+        metric = tf.keras.metrics.Recall(name='recall')
+    else:
+        raise NotImplementedError('evaluation metric {} not coded'.format(evaluation_metric))
 
     # set regularizers
     if kernel_regularizer == 'L1':
@@ -319,17 +324,10 @@ def cnn(units_input=64, units_inner=64, units_output=64, activation='relu', lr=0
     opt = keras.optimizers.Adam(learning_rate=lr)
     if n_classes == 2:
         model.add(keras.layers.Dense(n_classes, activation='sigmoid'))
-        # model.compile(loss='binary_crossentropy',
-        #               metrics=['accuracy', tf.keras.metrics.Mean(name='roc_auc', dtype=None)],
-        #               optimizer=opt)
-        model.compile(loss='binary_crossentropy',
-                      metrics=['accuracy'], optimizer=opt)
+        model.compile(loss='binary_crossentropy', metrics=['accuracy', metric], optimizer=opt)
     else:
         model.add(keras.layers.Dense(n_classes, activation='softmax'))
-        # model.compile(loss='categorical_crossentropy', metrics=['accuracy',
-        #               tf.keras.metrics.Mean(name='roc_auc', dtype=None)],
-        #               optimizer=opt)
-        model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer=opt)
+        model.compile(loss='categorical_crossentropy', metrics=['accuracy', metric], optimizer=opt)
 
     return model
 
@@ -342,3 +340,16 @@ def set_keras_callbacks(early_stop_patience=50):
                 keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=20, min_lr=0.0001),
                 keras.callbacks.EarlyStopping(monitor="val_loss", patience=early_stop_patience, verbose=1)]
     return callback
+
+
+def create_model():
+    # create model
+    model = keras.Sequential()
+    model.add(keras.layers.Dense(12, input_shape=(8,), activation='relu'))
+    model.add(keras.layers.Dense(1, activation='sigmoid'))
+    # Compile model
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
+
+
