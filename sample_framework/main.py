@@ -201,7 +201,7 @@ if __name__ == '__main__':
     args_dict = vars(args)
 
     # Check model type : It will return True if any of the substrings in substring_list is contained in string.
-    substring_list = ['cnn', 'lstm', 'imagenet']
+    substring_list = ['cnn', 'lstm', 'imagenet', 'transformer']
     if any(substring in args_dict['model_name'] for substring in substring_list):
         args_dict['model_type'] = 'signal'
     else:

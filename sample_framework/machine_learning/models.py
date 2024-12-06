@@ -5,12 +5,26 @@ from sklearn import metrics
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.neural_network import MLPClassifier
 from tensorflow import keras
 import keras_tuner as kt
-from sample_framework.definitions import DIR_RESULTS, RANDOM_STATE
-from sample_framework.utils.utils import load_args
+
+import sys
+
+# Dynamically locate data_folder
+current_dir = os.path.dirname(__file__)  # Get the directory of utils.py
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))  # Navigate to project root
+definitions_folder = os.path.join(parent_dir, "definitions")
+utils_folder = os.path.join(parent_dir, "utils_folder")
+
+# Add data_folder to sys.path
+sys.path.append(definitions_folder)
+sys.path.append(utils_folder)
+
+# Import the method from definitions
+from definitions import DIR_RESULTS, RANDOM_STATE
+from utils.utils import load_args
 
 
 def build_model(model_name, grid_results=None, n_classes=None, input_shape=None, units_input=None, units_inner=None,
@@ -24,6 +38,8 @@ def build_model(model_name, grid_results=None, n_classes=None, input_shape=None,
     elif 'lstm' in model_name:
         model = lstm(units=units_input, dropout=dropout, n_classes=n_classes, input_shape=input_shape,
                      dropout_amt=dropout_amt, kernel_regularizer=regularizer)
+    elif 'transformer' in model_name:
+        model = transformer(input_shape=input_shape, n_classes=n_classes, dropout_amt=dropout_amt)
     elif 'svc' in model_name:
         model = svc(grid_results)
     elif 'random_forest' in model_name:
@@ -329,6 +345,58 @@ def cnn(units_input=64, units_inner=64, units_output=64, activation='relu', lr=0
         # model.compile(loss='categorical_crossentropy', metrics=['accuracy',
         #               tf.keras.metrics.Mean(name='roc_auc', dtype=None)],
         #               optimizer=opt)
+        model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer=opt)
+
+    return model
+
+
+def transformer(input_shape, lr=0.001, dropout_amt=0.2, n_classes=None, embed_dim=32, num_heads=2, ff_dim=64, num_transformer_blocks=2):
+    """
+       Builds and compiles a Transformer-based model for time-series classification.
+
+       Parameters:
+           input_shape (tuple): Shape of the input data (time_steps, features).
+           embed_dim (int): Embedding dimension for attention layers.
+           num_heads (int): Number of attention heads.
+           ff_dim (int): Feedforward network dimension.
+           num_transformer_blocks (int): Number of Transformer blocks.
+           dropout_amt (float): Dropout rate for regularization.
+           learning_rate (float): Learning rate for the optimizer.
+
+       Returns:
+           keras.Model: A compiled Transformer-based model.
+       """
+    inputs = keras.layers.Input(shape=input_shape)
+
+    # Embedding: Convert the input into a higher-dimensional space
+    x = keras.layers.Dense(embed_dim)(inputs)
+
+    # Transformer Blocks
+    for _ in range(num_transformer_blocks):
+        # Multi-Head Self-Attention
+        attention_output = keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)(x, x)
+        attention_output = keras.layers.Dropout(dropout_amt)(attention_output)
+        x = keras.layers.LayerNormalization(epsilon=1e-6)(x + attention_output)
+
+        # Feedforward Network
+        ffn_output = keras.layers.Dense(ff_dim, activation="relu")(x)
+        ffn_output = keras.layers.Dense(embed_dim)(ffn_output)
+        ffn_output = keras.layers.Dropout(dropout_amt)(ffn_output)
+        x = keras.layers.LayerNormalization(epsilon=1e-6)(x + ffn_output)
+
+    # Global pooling and output layer
+    x = keras.layers.GlobalAveragePooling1D()(x)
+    x = keras.layers.Dropout(dropout_amt)(x)
+    outputs = keras.layers.Dense(n_classes, activation="sigmoid")(x)
+
+    # Build and compile the model
+    model = keras.Model(inputs, outputs)
+
+    opt = keras.optimizers.Adam(learning_rate=lr)
+    if n_classes == 2:
+        model.compile(loss='binary_crossentropy',
+                      metrics=['accuracy'], optimizer=opt)
+    else:
         model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer=opt)
 
     return model
