@@ -208,4 +208,3 @@ if __name__ == '__main__':
         args_dict['model_type'] = 'features'
 
     main(args_dict)
-
