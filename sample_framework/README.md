@@ -14,7 +14,7 @@ User can test framework using two sample datasets (HAR and Ford)
 
 User should follow these steps: <br>
 1. open terminal
-2. cd to repository root directory
+2. cd to sample_framework directory
 3. `conda create --name sample_ml python=3.9`
 4. `conda activate sample_ml`
 5. `conda install -c conda-forge tensorflow=2.11.1`

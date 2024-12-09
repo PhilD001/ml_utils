@@ -11,6 +11,20 @@ from sklearn.neural_network import MLPClassifier
 from tensorflow import keras
 import tensorflow as tf
 import keras_tuner as kt
+
+
+import sys
+# Dynamically locate data_folder
+current_dir = os.path.dirname(__file__)  # Get the directory of utils.py
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))  # Navigate to project root
+definitions_folder = os.path.join(parent_dir, "definitions")
+utils_folder = os.path.join(parent_dir, "utils_folder")
+
+# Add data_folder to sys.path
+sys.path.append(definitions_folder)
+sys.path.append(utils_folder)
+
+# Import the method from definitions
 from definitions import DIR_RESULTS, RANDOM_STATE
 from utils.utils import load_args
 
@@ -26,6 +40,8 @@ def build_model(model_name, grid_results=None, n_classes=None, input_shape=None,
     elif 'lstm' in model_name:
         model = lstm(units=units_input, dropout=dropout, n_classes=n_classes, input_shape=input_shape,
                      dropout_amt=dropout_amt, kernel_regularizer=regularizer)
+    elif 'transformer' in model_name:
+        model = transformer(input_shape=input_shape, n_classes=n_classes, dropout_amt=dropout_amt)
     elif 'svc' in model_name:
         model = svc(grid_results)
     elif 'random_forest' in model_name:
@@ -324,10 +340,86 @@ def cnn(units_input=64, units_inner=64, units_output=64, activation='relu', lr=0
     opt = keras.optimizers.Adam(learning_rate=lr)
     if n_classes == 2:
         model.add(keras.layers.Dense(n_classes, activation='sigmoid'))
-        model.compile(loss='binary_crossentropy', metrics=['accuracy', metric], optimizer=opt)
+        model.compile(loss='binary_crossentropy', metrics=[metric], optimizer=opt)
     else:
         model.add(keras.layers.Dense(n_classes, activation='softmax'))
-        model.compile(loss='categorical_crossentropy', metrics=['accuracy', metric], optimizer=opt)
+        model.compile(loss='categorical_crossentropy', metrics=[metric], optimizer=opt)
+
+    return model
+
+
+def transformer(input_shape, lr=0.001, dropout_amt=0.2, n_classes=None, embed_dim=32, num_heads=2, ff_dim=64,
+                num_transformer_blocks=2, evaluation_metric=None, epsilon=1e-6):
+    """
+    Builds and compiles a Transformer-based model for time-series classification.
+
+    Parameters:
+        input_shape (tuple): Shape of the input data (time_steps, features).
+        lr (float): Learning rate for the optimizer.
+        dropout_amt (float): Dropout rate for regularization.
+        n_classes (int): Number of classes in classification model
+        embed_dim (int): Embedding dimension for attention layers.
+        num_heads (int): Number of attention heads.
+        ff_dim (int): Feedforward network dimension.
+        num_transformer_blocks (int): Number of Transformer blocks.
+        evaluation_metric (str): Metric to evaluate the model on
+        epsilon (float): constant added to prevent numerical instability
+
+       Returns:
+           keras.Model: A compiled Transformer-based model.
+       """
+    # get relevant information from saved dict
+    arg_dict = load_args()
+    if input_shape is None:
+        input_shape = tuple(arg_dict['segment_shape'])
+    if n_classes is None:
+        n_classes = arg_dict['n_classes']
+    if evaluation_metric is None:
+        evaluation_metric = arg_dict['evaluation_metric']
+
+    # set correct evaluation metric
+    if evaluation_metric == 'auc':
+        metric = tf.keras.metrics.AUC(name='auc')
+    elif evaluation_metric == 'accuracy':
+        metric = tf.keras.metrics.AUC(name='accuracy')
+    elif evaluation_metric == 'recall':
+        metric = tf.keras.metrics.Recall(name='recall')
+    else:
+        raise NotImplementedError('evaluation metric {} not coded'.format(evaluation_metric))
+
+    # Initialize input
+    inputs = keras.layers.Input(shape=input_shape)
+
+    # Embedding: Convert the input into a higher-dimensional space
+    x = keras.layers.Dense(embed_dim)(inputs)
+
+    # Transformer Blocks
+    for _ in range(num_transformer_blocks):
+        # Multi-Head Self-Attention
+        attention_output = keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=embed_dim)(x, x)
+        attention_output = keras.layers.Dropout(dropout_amt)(attention_output)
+        x = keras.layers.LayerNormalization(epsilon=epsilon)(x + attention_output)
+
+        # Feedforward Network
+        ffn_output = keras.layers.Dense(ff_dim, activation="relu")(x)
+        ffn_output = keras.layers.Dense(embed_dim)(ffn_output)
+        ffn_output = keras.layers.Dropout(dropout_amt)(ffn_output)
+        x = keras.layers.LayerNormalization(epsilon=epsilon)(x + ffn_output)
+
+    # Global pooling and output layer
+    x = keras.layers.GlobalAveragePooling1D()(x)
+    x = keras.layers.Dropout(dropout_amt)(x)
+    outputs = keras.layers.Dense(n_classes, activation="sigmoid")(x)
+
+    # Build and compile the model
+    model = keras.Model(inputs, outputs)
+
+    opt = keras.optimizers.Adam(learning_rate=lr)
+    if n_classes == 2:
+        model.compile(loss='binary_crossentropy',
+                      metrics=[metric], optimizer=opt)
+    else:
+        model.compile(loss='categorical_crossentropy', metrics=[metric], optimizer=opt)
 
     return model
 
