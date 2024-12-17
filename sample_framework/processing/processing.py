@@ -1,7 +1,5 @@
 import os
-import random
 import numpy as np
-from scipy import signal
 import pandas as pd
 from tensorflow import keras
 
@@ -22,6 +20,8 @@ def load_database(arg_dict):
         X, y, user, channel_names, meta_data = load_keras_sample_time_series_db()
     elif arg_dict['database'] == 'HAR_sample':
         X, y, user, channel_names, meta_data = load_har_db(channel_names=arg_dict['channel_names'])
+    elif arg_dict['database'] == 'Honda':
+        X, y, user, channel_names, meta_data = load_honda_db()
     else:
         raise NotImplementedError('database {} not supported'.format(arg_dict['database']))
 
@@ -84,6 +84,50 @@ def load_keras_sample_time_series_db():
     users = np.arange(0, len(y), 1)
     channel_names = ['motor_noise']
     meta_data = dict(freq=1)
+    return X, y, users, channel_names, meta_data
+
+
+def load_honda_db(sensor_type='IMU'):
+    """ loads IMU + force pressure data from the Losig et al. public dataset. See paper here:
+
+    interpolated IMU : https://drive.google.com/file/d/1vfNW-BHeErT7Sn6cJmFmE-sKbePAZGI8/view?usp=drive_link
+    interpolated pressure: https://drive.google.com/file/d/1nPjoQFMUDvtco4Cmm9yf-NBQ2aR_kplP/view?usp=drive_link
+
+    Returns:
+        X: nd array (samples, frames, channels)
+        y: list (samples)
+        users: nd array (samples)
+        channel_names: list. unique channel names in correct order
+    """
+    #todo add path to pressure
+
+    if sensor_type == 'IMU':
+        filepath = os.path.join(DIR_DATA, 'Honda_sample', 'interpolated_imu_sensor_df.csv')
+    else:
+        raise NotImplementedError
+
+    df = pd.read_csv(filepath)
+    x_df = df.drop(['time', 'sensor_location', 'walk_mode'], axis=1)
+    y_df = df[['walk_mode', 'gait_cycle_id']]
+
+    # Group by 'gait_cycle_id' and then remove the column (thanks ChatGPT)
+    x = [group.drop(columns='gait_cycle_id').values for _, group in x_df.groupby('gait_cycle_id')]
+    y_list = [group.drop(columns='gait_cycle_id').values for _, group in y_df.groupby('gait_cycle_id')]
+
+    # create the y array
+    y = [y[0, 0] for y in y_list]  # Extract the repeated string from each array
+
+    # create the x tensor
+    X = np.stack(x, axis=0)
+
+    # todo: update users
+    users = np.arange(1, len(y) + 1)
+
+    # get channel names in order
+    channel_names, indices = np.unique(df['sensor_location'], return_index=True)
+    channel_names = list(channel_names[np.argsort(indices)])
+
+    meta_data = None
     return X, y, users, channel_names, meta_data
 
 

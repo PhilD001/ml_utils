@@ -156,7 +156,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Cough Detection Project")
 
     # Data set arguments
-    parser.add_argument('--database', default='keras_sample', choices={'keras_sample', 'HAR_sample'})
+    parser.add_argument('--database', default='keras_sample', choices={'keras_sample', 'HAR_sample', 'Honda'})
     parser.add_argument('--channel_names', nargs='+', default='all')
 
     # General arguments
