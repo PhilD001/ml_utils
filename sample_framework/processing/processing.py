@@ -127,7 +127,7 @@ def load_honda_db(sensor_type='IMU'):
     channel_names, indices = np.unique(df['sensor_location'], return_index=True)
     channel_names = list(channel_names[np.argsort(indices)])
 
-    meta_data = None
+    meta_data = {'freq': 240}
     return X, y, users, channel_names, meta_data
 
 
