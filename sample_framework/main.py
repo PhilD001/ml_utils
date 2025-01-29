@@ -9,6 +9,7 @@ from machine_learning.models import build_model, tune_keras_model, set_keras_cal
 from utils.utils import print_plot_save_results, evaluate_model, load_trained_model, save_args, subject_wise_split
 from feature_engineering.features import extract_features, feature_selection
 from definitions import DIR_RESULTS, RANDOM_STATE
+from machine_learning.scaler import NoScalingScaler
 
 
 def main(arg_dict):
@@ -37,15 +38,18 @@ def main(arg_dict):
     # 2 - TRAIN/TEST SPLIT DATA ----------------------------------------------------------------------------------------
     by_subject = arg_dict['train_test_split_by_user']
     test_size = arg_dict['test_ratio']
-    X_train, X_test, y_train, y_test, sub_train, sub_test = subject_wise_split(X, y, user, subject_wise=by_subject,
-                                                                               test_size=test_size,
-                                                                               random_state=RANDOM_STATE)
+    X_train, X_test, y_train, y_test, users_train, users_test = subject_wise_split(X, y, user, subject_wise=by_subject,
+                                                                                   test_size=test_size,
+                                                                                   random_state=RANDOM_STATE)
 
     # 3 - SCALE DATA ---------------------------------------------------------------------------------------------------
     # -In the interest of preventing information about the distribution of the test set leaking into your model, you
     #  should fit the scaler on your training data only, then standardise both training and test sets with that scaler.
     # - tensor data (samples x channels x frames) must be reshaped for scaling tool
-    sc = MinMaxScaler()
+    if arg_dict['scale_signal']:
+        sc = MinMaxScaler()
+    else:
+        sc = NoScalingScaler()
     X_train = sc.fit_transform(X_train.reshape(-1, X_train.shape[-1])).reshape(X_train.shape)
     X_test = sc.transform(X_test.reshape(-1, X_test.shape[-1])).reshape(X_test.shape)
 
@@ -78,7 +82,9 @@ def main(arg_dict):
             model, arg_dict, history = load_trained_model(arg_dict)
         else:
             if arg_dict['tune']:
-                model, arg_dict = tune_sklearn_model(X_train, y_train, arg_dict)
+                # model, arg_dict = tune_sklearn_model(X_train, y_train, arg_dict)
+                model, arg_dict = tune_sklearn_model(X_train, y_train, arg_dict, cv_folds=5, participants=users_train)
+
             else:
                 model = build_model(arg_dict['model_name'])
 
@@ -170,6 +176,9 @@ if __name__ == '__main__':
 
     # arguments for selection model type *******************************************************************************
     parser.add_argument('--model_name', nargs='+', default=['random_forest', 'svc'], help='see models.py for all choices')
+
+    # arguments for data processing ************************************************************************************
+    parser.add_argument('--scale_signal', default=False, action='store_true')
 
     # arguments for feature engineering ********************************************************************************
     parser.add_argument('--feature_selection', default=False, action='store_true')

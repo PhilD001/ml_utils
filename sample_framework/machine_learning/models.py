@@ -6,7 +6,7 @@ from sklearn import metrics
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, StratifiedGroupKFold
 from sklearn.neural_network import MLPClassifier
 from tensorflow import keras
 import tensorflow as tf
@@ -99,7 +99,7 @@ def tune_keras_model(X_train, y_train, arg_dict, callback, max_trials=20, execut
     return model, arg_dict
 
 
-def tune_sklearn_model(X_train, y_train, arg_dict, cv_folds=5):
+def tune_sklearn_model(X_train, y_train, arg_dict, cv_folds=5, participants=None):
     """ tunes sklearn models using keras tuner"""
 
     # clean up from previous run
@@ -116,24 +116,86 @@ def tune_sklearn_model(X_train, y_train, arg_dict, cv_folds=5):
     else:
         raise NotImplementedError
 
+    # manual cross val to allow subject wise  (cv_folds)
+    best_model, best_hps = manual_cross_val(X_train, y_train, cv_folds, metric, participants)
+
     # tune
+    # tuner = kt.tuners.SklearnTuner(
+    #     oracle=kt.oracles.BayesianOptimizationOracle(     # any tuner except HyperBand which is for neural networks
+    #         objective=kt.Objective('score', 'max'),       # always set objective to Objective('score', 'max')
+    #         max_trials=10),
+    #     hypermodel=build_sklearn_model_tune,
+    #     scoring=metrics.make_scorer(metric),
+    #     cv=StratifiedKFold(cv_folds),
+    #     overwrite=True,
+    #     directory=DIR_RESULTS,
+    #     project_name='sklearn_tuner_results_temp',
+    # )
+    #
+    # tuner.search(X_train, y_train)
+    # model = tuner.get_best_models(num_models=1)[0]
+    # arg_dict['model_name'] = str(type(model).__name__)
+
+    return model, arg_dict
+
+
+def manual_cross_val(X_train, y_train, cv_folds, metric, participants=None):
+    """ manually loop through cross validation to ensure we can implement a subject wise split"""
+
+    best_model = None
+    best_hps = None
+    best_score = -float('inf')  # Initialize the best score with a very low number
+    #  Manually perform the cross-validation loop with StratifiedGroupKFold
+    if participants is None:
+        kfold = StratifiedKFold(cv_folds, shuffle=True, random_state=RANDOM_STATE)
+        for train_index, val_index in kfold.split(X_train, y_train):
+            fold_best_model, fold_best_hps, fold_score = _cross_val(X_train, y_train, train_index, val_index, metric)
+
+            if fold_score > best_score:
+                best_model = fold_best_model
+                best_score = fold_score
+                best_hps = fold_best_hps
+    else:
+        kfold = StratifiedGroupKFold(n_splits=cv_folds, shuffle=True, random_state=RANDOM_STATE)
+        for train_index, val_index in kfold.split(X_train, y_train, groups=participants):
+
+            fold_best_model, fold_best_hps, fold_score = _cross_val(X_train, y_train, train_index, val_index, metric)
+
+            if fold_score > best_score:
+                best_model = fold_best_model
+                best_score = fold_score
+                best_hps = fold_best_hps
+
+    return best_model, best_hps
+
+
+def _cross_val(X_train, y_train, train_index, val_index, metric):
+    """ helper function for manual_cross_val"""
+    X_train_fold, X_val_fold = X_train[train_index], X_train[val_index]
+    y_train_fold, y_val_fold = y_train[train_index], y_train[val_index]
+
     tuner = kt.tuners.SklearnTuner(
-        oracle=kt.oracles.BayesianOptimizationOracle(     # any tuner except HyperBand which is for neural networks
-            objective=kt.Objective('score', 'max'),       # always set objective to Objective('score', 'max')
-            max_trials=10),
+        oracle=kt.oracles.BayesianOptimizationOracle(
+            objective=kt.Objective('score', 'max'),
+            max_trials=10, seed=RANDOM_STATE),
         hypermodel=build_sklearn_model_tune,
         scoring=metrics.make_scorer(metric),
-        cv=StratifiedKFold(cv_folds),
         overwrite=True,
         directory=DIR_RESULTS,
         project_name='sklearn_tuner_results_temp',
     )
 
-    tuner.search(X_train, y_train)
-    model = tuner.get_best_models(num_models=1)[0]
-    arg_dict['model_name'] = str(type(model).__name__)
+    # Perform tuning (without validation_data in search)
+    tuner.search(X_train_fold, y_train_fold)
 
-    return model, arg_dict
+    # Get the best model from this fold
+    fold_best_model = tuner.get_best_models(num_models=1)[0]
+    fold_best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+
+    # Evaluate the fold best model on the validation set
+    fold_score = fold_best_model.score(X_val_fold, y_val_fold)
+
+    return fold_best_model, fold_best_hps, fold_score
 
 
 def build_sklearn_model_tune(hp):

@@ -27,7 +27,7 @@ Note:
 
   
 ### Activate (next times)
-1. Activate environment: ``conda activate samle_ml``
+1. Activate environment: ``conda activate sample_ml``
 
 # Run (Overview)
 1. CD to ``samle_framework``
