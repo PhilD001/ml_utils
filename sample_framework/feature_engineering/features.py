@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 from scipy.fftpack import fft, fftfreq
-import flirt
 from sklearn.feature_selection import VarianceThreshold
 import hashlib
 
@@ -12,7 +11,7 @@ from definitions import DIR_DATA, DIR_RESULTS, DIR_ROOT
 from utils.utils import load_args, save_args
 
 
-def extract_features(x, channel_names, freq, feature_set, save_features=True, force_recompute=False, te=1,
+def extract_features(x, channel_names, freq, feature_set, save_features=True, force_recompute=False, fsamp=1,
                      verbose=False):
     """ create basic features based on :
         https://github.com/jeandeducla/ML-Time-Series/blob/master/Neural_Network-Accelerometer-Features.ipynb
@@ -24,7 +23,7 @@ def extract_features(x, channel_names, freq, feature_set, save_features=True, fo
         feature_set :       str. Choices {'test' or 'train'}. Suffix used to allow identification of saved features
         save_features :     flaot. default True. Save features to disk for quick reload after first run
         force_recompute :   Bool. default False. Forces recomputation of features even if previously saved to disk
-        te :                float. default=1.0. Used as constant for some features, see methods
+        fsamp :             float. default=1.0. Used as constant for some features, see methods
         verbose :           Bool. Default=False. If true, messages are printed to screen
 
     Returns
@@ -35,13 +34,13 @@ def extract_features(x, channel_names, freq, feature_set, save_features=True, fo
         - original code updated (1) allow for processing of n channels instead of 3, (2) removal of channel correlation
           features
     """
-    arg_dict = load_args(verbose)
+    arg_dict = load_args()
 
     if verbose:
         print('computing features for the {} set ...'.format(feature_set))
 
     if force_recompute:
-        feats_all, feats_all_names = compute_features(x, channel_names, te, freq, verbose)
+        feats_all, feats_all_names = compute_features(x, channel_names, fsamp, freq, verbose)
         if save_features:
             features_pth = _create_features_unique_path(feature_set, x, arg_dict)
             _save_features(feats_all, feats_all_names, features_pth, verbose)
@@ -50,7 +49,7 @@ def extract_features(x, channel_names, freq, feature_set, save_features=True, fo
         if os.path.exists(features_pth):
             feats_all, feats_all_names = _load_saved_features(features_pth, verbose)
         else:
-            feats_all, feats_all_names = compute_features(x, channel_names, te, freq, verbose)
+            feats_all, feats_all_names = compute_features(x, channel_names, fsamp, freq, verbose)
             if save_features:
                 _save_features(feats_all, feats_all_names, features_pth, verbose)
 
@@ -65,7 +64,6 @@ def _create_features_unique_path(feat_set, x, arg_dict):
                      train_test_split_by_user=arg_dict['train_test_split_by_user'],
                      test_ratio=arg_dict['test_ratio'],
                      validation_ratio=arg_dict['validation_ratio'],
-                     feature_selection=arg_dict['feature_selection'],
                      segment_shape=arg_dict['segment_shape'],
                      n_classes=arg_dict['n_classes'])
 
@@ -74,11 +72,6 @@ def _create_features_unique_path(feat_set, x, arg_dict):
         feat_dict['classification'] = arg_dict['classification']
     if 'positions' in arg_dict:
         feat_dict['positions'] = arg_dict['positions']
-    if 'jitter_signal' in arg_dict:
-        feat_dict['jitter_signal'] = arg_dict['jitter_signal']
-    if 'frames_per_strip' in arg_dict:
-        feat_dict['frames_per_strip'] = arg_dict['frames_per_strip']
-
 
     # extract information
     database = feat_dict['database']
@@ -99,6 +92,60 @@ def string_to_hex(string):
     hex_code = hash_object.hexdigest()
 
     return hex_code
+
+
+def feature_clean(x_train, x_test, feature_names, verbose=False):
+    """ basic clean regardless of feature selection true or false """
+
+    # convert to pandas for easier operations
+    df_X_train = pd.DataFrame(x_train, columns=feature_names)
+    df_X_test = pd.DataFrame(x_test, columns=feature_names)
+
+    # replace any duplicate names
+    if any(df_X_train.columns.duplicated()):
+        df_X_train = rename_duplicate_columns(df_X_train, verbose)
+        df_X_test = rename_duplicate_columns(df_X_test, verbose)
+
+    # Replace -inf and inf with nan
+    df_X_train = df_X_train.replace([np.inf, -np.inf], np.nan)
+    df_X_test = df_X_test.replace([np.inf, -np.inf], np.nan)
+
+    # Check for NaN values in each column and return a boolean mask
+    nan_mask_train = df_X_train.isna().any()
+    nan_mask_test = df_X_test.isna().any()
+
+    # Get the indices of columns with NaN values
+    nan_column_train = nan_mask_train[nan_mask_train].index.tolist()
+    nan_column_test = nan_mask_test[nan_mask_test].index.tolist()
+    if len(nan_column_train) > 0:
+        df_X_train = df_X_train.drop(columns=nan_column_train, errors='ignore')
+        df_X_test = df_X_test.drop(columns=nan_column_train, errors='ignore')
+    if len(nan_column_test) > 0:
+        df_X_train = df_X_train.drop(columns=nan_column_test, errors='ignore')
+        df_X_test = df_X_test.drop(columns=nan_column_test, errors='ignore')
+
+    # convert back to nd arrays
+    x_train = df_X_train.to_numpy()
+    x_test = df_X_test.to_numpy()
+    feature_names = list(df_X_train.columns)
+
+    return x_train, x_test, feature_names
+
+
+def rename_duplicate_columns(df, verbose=False):
+    df_columns = df.columns
+    new_columns = []
+    for item in df_columns:
+        counter = 0
+        newitem = item
+        while newitem in new_columns:
+            counter += 1
+            if verbose:
+                print('renaming feature {}'.format(newitem))
+            newitem = "{}_{}".format(item, counter)
+        new_columns.append(newitem)
+    df.columns = new_columns
+    return df
 
 
 def compute_features(x, channel_names, te, freq, verbose=False):
@@ -123,16 +170,6 @@ def compute_features(x, channel_names, te, freq, verbose=False):
         feature_freq_names = [channel_names[ch] + x for x in feature_freq_names]
         feats_all.append(features_freq)
         feats_all_names.append(feature_freq_names)
-
-    # extract acceleration based features via flirt
-    if any('acc' in ch for ch in channel_names):
-        indx = [i for i, s in enumerate(channel_names) if 'acc' in s]
-        if len(indx) != 3:
-            warnings.warn('Flirt extractor requires 3 acc channels (x,y,x), {} found, skipping...'.format(len(indx)))
-        else:
-            features_flirt_acc, feature_names_flirt_acc = get_flirt_acc_features(x[:, :, indx], freq)
-            feats_all.append(features_flirt_acc)
-            feats_all_names.append(feature_names_flirt_acc)
 
     # flatten lists and arrays
     feats_all = np.concatenate(feats_all, axis=1)
@@ -300,6 +337,8 @@ def _save_features(feats_all, feats_all_names, features_pth, verbose=False):
 
 def feature_selection(x_train, x_test, feature_names, correlation_threshold=0.95, variance_threshold=0.01,
                       verbose=False):
+
+
     """ some simple feature reduction algorithms
     see  https://stackabuse.com/applying-filter-methods-in-python-for-feature-selection/
 
