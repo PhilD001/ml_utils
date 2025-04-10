@@ -368,10 +368,12 @@ def svc(grid_results=None):
     """ build an SVC model """
     # define search space
     if grid_results:
-        model = SVC(random_state=0, kernel=grid_results.best_params_['kernel'], gamma=grid_results.best_params_['gamma'],
-                    C=grid_results.best_params_['C'])
+        model = SVC(random_state=0, kernel=grid_results.best_params_['kernel'],
+                    gamma=grid_results.best_params_['gamma'],
+                    C=grid_results.best_params_['C'],
+                    probability=True)
     else:
-        model = SVC()
+        model = SVC(probability=True)
     return model
 
 

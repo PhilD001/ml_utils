@@ -179,6 +179,7 @@ def main(arg_dict):
         # 6 - EVALUATE TRAINED MODEL -----------------------------------------------------------------------------------
         y_pred_train = model.predict(X_train)
         y_pred_prob_train = model.predict_proba(X_train)[:, 1]
+
         model_eval_dict_train, cm_train, fpr, tpr, threshold = eval_model(y_train, y_pred_train, y_pred_prob_train)
 
         # 7 - EVALUATE MODEL ON TEST SET (OPTIONAL) --------------------------------------------------------------------
@@ -214,8 +215,7 @@ if __name__ == '__main__':
     # General arguments
     parser.add_argument('--verbose', default=False, action='store_true', help='use flag to print information to screen')
     parser.add_argument('--random_state', type=int, default=RANDOM_STATE, help='use to change random seed')
-    parser.add_argument('--cross_val', default=False, type=bool, help='iterate through train/test split times')
-    parser.add_argument('--cross_val_num', default=10, type=int, help='iterate cross_val_num times')
+    parser.add_argument('--cross_val_num', default=1, type=int, help='iterate cross_val_num times')
 
     # Data processing
     parser.add_argument('--scale_signal', default=False, action='store_true')
