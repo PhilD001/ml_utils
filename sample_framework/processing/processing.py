@@ -20,8 +20,6 @@ def load_database(arg_dict):
         X, y, user, channel_names, meta_data = load_keras_sample_time_series_db()
     elif arg_dict['database'] == 'HAR_sample':
         X, y, user, channel_names, meta_data = load_har_db(channel_names=arg_dict['channel_names'])
-    elif arg_dict['database'] == 'Honda':
-        X, y, user, channel_names, meta_data = load_honda_db()
     else:
         raise NotImplementedError('database {} not supported'.format(arg_dict['database']))
 
