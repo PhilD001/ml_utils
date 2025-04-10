@@ -142,6 +142,8 @@ def load_har_db(channel_names='all'):
         raise IOError('please download and unzip the HAR dataset from '
                       'https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip')
 
+    if channel_names[0] == 'all':
+        channel_names = 'all'
     if channel_names == 'all':
         channel_names = ['total_acc_x', 'total_acc_y', 'total_acc_z',
                          'body_acc_x', 'body_acc_y', 'body_acc_z',
